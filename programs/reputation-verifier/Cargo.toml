@@ -1,0 +1,21 @@
+[package]
+name = "reputation-verifier"
+version = "0.1.0"
+description = "Opaque Reputation Verifier — on-chain ZK proof verification with nullifier tracking"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "reputation_verifier"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.32", features = ["init-if-needed"] }
+groth16-verifier = { path = "../groth16-verifier", features = ["cpi"] }
