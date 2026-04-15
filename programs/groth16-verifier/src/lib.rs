@@ -8,18 +8,26 @@ declare_id!("6mFaKyp7F4NqNeoiBLEWSqy5wJSk7rWf1EYumVXgHvhQ");
 /// On-chain Groth16 verifier using Solana's alt_bn128 syscalls.
 /// Equivalent to the snarkjs-generated Solidity Groth16Verifier.
 ///
-/// Verification key constants are baked in from the stealth_attestation circuit
-/// trusted setup (same values as the EVM version).
+/// V1: verifies the original stealth_attestation circuit (5 public signals, IC0..IC5).
+/// V2: verifies the upgraded stealth_reputation circuit (4 public signals, IC0..IC4).
+///     The V2 leaf commits to schema_id and issuer_pk_x in addition to stealth_pk.
 #[program]
 pub mod groth16_verifier {
     use super::*;
 
-    /// Verify a Groth16 proof against the hardcoded verification key.
+    /// V1 — Verify a Groth16 proof against the V1 verification key.
     ///
     /// * `proof_a` — G1 point (2 × 32 bytes, big-endian).
     /// * `proof_b` — G2 point (2 × 2 × 32 bytes, big-endian).
     /// * `proof_c` — G1 point (2 × 32 bytes, big-endian).
     /// * `pub_signals` — 5 public signals as 32-byte big-endian field elements.
+    ///
+    /// Public signal layout (V1):
+    ///   [0] nullifier           (circuit output)
+    ///   [1] is_valid            (circuit output, must be 1)
+    ///   [2] merkle_root         (public input)
+    ///   [3] attestation_id      (public input)
+    ///   [4] external_nullifier  (public input)
     pub fn verify_proof(
         _ctx: Context<VerifyProof>,
         proof_a: [u8; 64],
@@ -42,35 +50,80 @@ pub mod groth16_verifier {
             vk_x = alt_bn128_g1_add(&vk_x, &mul_result)?;
         }
 
-        // Negate A: -A.y = q - A.y
-        let mut neg_a = proof_a;
-        let a_y = &proof_a[32..64];
-        let neg_a_y = field_negate(a_y);
-        neg_a[32..64].copy_from_slice(&neg_a_y);
-
-        // Pairing check: e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) == 1
-        let mut pairing_input = Vec::with_capacity(768);
-
-        // Pair 1: -A, B
-        pairing_input.extend_from_slice(&neg_a);
-        pairing_input.extend_from_slice(&proof_b);
-
-        // Pair 2: alpha, beta
-        pairing_input.extend_from_slice(&VK_ALPHA);
-        pairing_input.extend_from_slice(&VK_BETA);
-
-        // Pair 3: vk_x, gamma
-        pairing_input.extend_from_slice(&vk_x);
-        pairing_input.extend_from_slice(&VK_GAMMA);
-
-        // Pair 4: C, delta
-        pairing_input.extend_from_slice(&proof_c);
-        pairing_input.extend_from_slice(&VK_DELTA);
-
-        let pairing_result = alt_bn128_pairing(&pairing_input)?;
-
-        Ok(pairing_result)
+        run_pairing_check(proof_a, proof_b, proof_c, vk_x)
     }
+
+    /// V2 — Verify a Groth16 proof against the V2 verification key.
+    ///
+    /// The V2 circuit has 4 public signals (not 5) and uses a 5-input Poseidon leaf
+    /// that commits to schema_id and issuer_pk_x, making proofs schema- and issuer-specific.
+    ///
+    /// Public signal layout (V2):
+    ///   [0] merkle_root         (public input)
+    ///   [1] attestation_id      (= schema_id, public input)
+    ///   [2] external_nullifier  (public input)
+    ///   [3] nullifier_hash      (Poseidon(stealth_pk, external_nullifier), public input)
+    pub fn verify_proof_v2(
+        _ctx: Context<VerifyProof>,
+        proof_a: [u8; 64],
+        proof_b: [u8; 128],
+        proof_c: [u8; 64],
+        public_inputs: VerifyPublicInputsV2,
+    ) -> Result<bool> {
+        let pub_signals = [
+            public_inputs.merkle_root,
+            public_inputs.attestation_id,
+            public_inputs.external_nullifier,
+            public_inputs.nullifier_hash,
+        ];
+
+        // Validate all public signals are in the scalar field
+        for signal in &pub_signals {
+            require!(
+                is_valid_scalar(signal),
+                VerifierError::InvalidPublicSignal
+            );
+        }
+
+        // Compute vk_x = VK_IC_V2[0] + sum(pub_signals[i] * VK_IC_V2[i+1])
+        let mut vk_x = VK_IC_V2[0];
+        for i in 0..4 {
+            let mul_result = alt_bn128_g1_mul(&VK_IC_V2[i + 1], &pub_signals[i])?;
+            vk_x = alt_bn128_g1_add(&vk_x, &mul_result)?;
+        }
+
+        run_pairing_check(proof_a, proof_b, proof_c, vk_x)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared pairing check
+// ---------------------------------------------------------------------------
+
+fn run_pairing_check(
+    proof_a: [u8; 64],
+    proof_b: [u8; 128],
+    proof_c: [u8; 64],
+    vk_x: [u8; 64],
+) -> Result<bool> {
+    // Negate A: -A.y = q - A.y
+    let mut neg_a = proof_a;
+    let a_y = &proof_a[32..64];
+    let neg_a_y = field_negate(a_y);
+    neg_a[32..64].copy_from_slice(&neg_a_y);
+
+    // Pairing check: e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) == 1
+    let mut pairing_input = Vec::with_capacity(768);
+    pairing_input.extend_from_slice(&neg_a);
+    pairing_input.extend_from_slice(&proof_b);
+    pairing_input.extend_from_slice(&VK_ALPHA);
+    pairing_input.extend_from_slice(&VK_BETA);
+    pairing_input.extend_from_slice(&vk_x);
+    pairing_input.extend_from_slice(&VK_GAMMA);
+    pairing_input.extend_from_slice(&proof_c);
+    pairing_input.extend_from_slice(&VK_DELTA);
+
+    alt_bn128_pairing(&pairing_input)
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +346,79 @@ const VK_IC: [[u8; 64]; 6] = [
         0x05, 0x86, 0xd0, 0xc3, 0x97, 0x45, 0x87, 0xee, 0x12, 0xb7, 0x89, 0x65, 0xae, 0x86, 0xcc, 0x8e,
         0x2c, 0x2f, 0xfc, 0x0d, 0x19, 0xab, 0x81, 0x0f, 0xd9, 0x8d, 0x61, 0x1e, 0x4e, 0x0a, 0xf7, 0x24,
         0xfe, 0x6d, 0x89, 0x9b, 0x35, 0x31, 0x90, 0x40, 0x2d, 0x2a, 0xb2, 0xc7, 0x67, 0x0a, 0xc5, 0x8c,
+    ],
+];
+
+// ---------------------------------------------------------------------------
+// V2 Input struct
+// ---------------------------------------------------------------------------
+
+/// Public inputs for the V2 stealth_reputation circuit.
+/// Each field is a BN254 scalar field element encoded as big-endian 32 bytes.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct VerifyPublicInputsV2 {
+    /// Merkle root of the announcement tree (on-chain or in announcement)
+    pub merkle_root: [u8; 32],
+    /// attestation_id = schema_id packed into a BN254 field element.
+    /// The verifier confirms the proof is about the expected schema.
+    pub attestation_id: [u8; 32],
+    /// Domain separator preventing cross-application proof replay.
+    pub external_nullifier: [u8; 32],
+    /// Poseidon(stealth_pk, external_nullifier) — consumed on-chain.
+    pub nullifier_hash: [u8; 32],
+}
+
+// ---------------------------------------------------------------------------
+// V2 Verification Key IC points (G1) — IC[0..4]
+//
+// These must be regenerated after the V2 circuit trusted setup.
+// Placeholder values match the same encoding pattern as V1 IC points above.
+// Replace with the actual snarkjs-exported IC values after running:
+//   snarkjs groth16 setup circuits/v2/stealth_reputation.r1cs pot16_final.ptau circuit_v2_final.zkey
+//   snarkjs zkey export verificationkey circuit_v2_final.zkey verification_key_v2.json
+// ---------------------------------------------------------------------------
+
+// V2 IC points — 5 points (IC0..IC4) for 4 public signals
+const VK_IC_V2: [[u8; 64]; 5] = [
+    // IC0 — to be replaced after V2 trusted setup
+    [
+        0x2b, 0x7c, 0x3a, 0x5e, 0x81, 0x94, 0xd2, 0xf7, 0x0e, 0x52, 0x3b, 0xc9, 0xa1, 0x76, 0xd8,
+        0x4f, 0x30, 0x8e, 0x21, 0xc4, 0x59, 0x6b, 0xfa, 0x11, 0x78, 0xe3, 0x42, 0x9d, 0x05, 0xb6,
+        0x7a, 0x23, 0x1d, 0xef, 0x08, 0x4c, 0xb3, 0x27, 0x65, 0x9e, 0xa4, 0x51, 0xf2, 0x3c, 0x80,
+        0x17, 0x6d, 0xce, 0x90, 0x43, 0x2f, 0x8b, 0x56, 0xe1, 0x74, 0xaa, 0x29, 0x6c, 0xb5, 0x0d,
+        0xf8, 0x3e, 0x91, 0x5c,
+    ],
+    // IC1
+    [
+        0x14, 0xa3, 0x6f, 0xd0, 0x7b, 0x25, 0xc8, 0x91, 0x3d, 0x5e, 0xf4, 0x20, 0x86, 0xc2, 0x49,
+        0x7d, 0x01, 0x58, 0x8a, 0xe7, 0xbc, 0x34, 0x6c, 0xf9, 0x52, 0x2b, 0xa0, 0x79, 0x1e, 0x43,
+        0xd6, 0x08, 0x27, 0xf1, 0x9c, 0x64, 0x30, 0xab, 0x5d, 0xe2, 0x87, 0x1b, 0xfc, 0x48, 0x73,
+        0x0a, 0x95, 0x21, 0x6e, 0xda, 0xb3, 0x40, 0x07, 0xc7, 0x83, 0x59, 0x1f, 0xe4, 0xa6, 0x2d,
+        0x70, 0x8c, 0x45, 0xb9,
+    ],
+    // IC2
+    [
+        0x09, 0x52, 0xc1, 0x3e, 0xf7, 0x84, 0x29, 0xb6, 0x41, 0x0d, 0x93, 0x5c, 0xe8, 0x26, 0x7a,
+        0x03, 0xbd, 0x47, 0x9f, 0x60, 0x2e, 0x15, 0xd8, 0xac, 0x73, 0xea, 0x31, 0x96, 0x05, 0xba,
+        0x42, 0x1c, 0x3b, 0x07, 0x68, 0x2d, 0xa5, 0x91, 0xf3, 0x4e, 0xbc, 0x20, 0x85, 0x57, 0xca,
+        0x39, 0x0e, 0x76, 0x13, 0xde, 0x98, 0x44, 0xb0, 0x62, 0x27, 0xef, 0x8b, 0x53, 0xa1, 0x1d,
+        0x70, 0xfc, 0x35, 0x89,
+    ],
+    // IC3
+    [
+        0x1e, 0x80, 0x53, 0xa7, 0xc2, 0x0f, 0x6b, 0x39, 0xd4, 0x85, 0x1c, 0x6a, 0x37, 0xf9, 0x24,
+        0x0b, 0x68, 0x92, 0xe0, 0x55, 0x1a, 0xd7, 0xbc, 0x43, 0xf2, 0x8e, 0x30, 0x61, 0xaf, 0x74,
+        0x05, 0x2c, 0x48, 0x16, 0x79, 0xcb, 0x3f, 0x0a, 0x93, 0x57, 0xe2, 0x21, 0x8d, 0x4b, 0x60,
+        0xfe, 0x19, 0x74, 0x32, 0xa0, 0x8b, 0x5e, 0xc9, 0x07, 0x46, 0xd1, 0x83, 0x2a, 0x97, 0x15,
+        0x6d, 0xe4, 0x50, 0x2b,
+    ],
+    // IC4
+    [
+        0x22, 0x6b, 0xd7, 0x01, 0x94, 0x5c, 0x38, 0xef, 0x7a, 0x20, 0xc3, 0x56, 0x8b, 0xf0, 0x49,
+        0x13, 0x7d, 0x82, 0xae, 0x60, 0x27, 0xd4, 0x91, 0xb3, 0x4c, 0x0e, 0x68, 0x35, 0xa1, 0xfc,
+        0x57, 0x2a, 0x0b, 0x93, 0x61, 0x20, 0xde, 0x74, 0xf8, 0x42, 0x1c, 0x8a, 0x53, 0x96, 0xbd,
+        0x05, 0x3f, 0x67, 0x1e, 0xa5, 0x80, 0x24, 0xc9, 0x43, 0x78, 0xeb, 0x12, 0x5d, 0xb6, 0x30,
+        0xf4, 0x29, 0x8c, 0x71,
     ],
 ];
 
