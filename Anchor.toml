@@ -7,12 +7,16 @@ stealth_registry = "E9LBRG5eP2kvuNfveouqQ9tA5P6nrpyLyWFjH9MFYVno"
 stealth_announcer = "HGFn2fH7bVQ5cSuiG52NjzN9m11YrB3FZUfoN9b9A5jf"
 groth16_verifier = "6mFaKyp7F4NqNeoiBLEWSqy5wJSk7rWf1EYumVXgHvhQ"
 reputation_verifier = "BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM"
+schema_registry = "FbgMJYGWnLKLcrKYS1NxM5uER1ihQkYLMTLs4STuDMWB"
+attestation_engine_v2 = "4T9kPCVCFGdEuLpEqRJihsPCbEEo2LWWDEPFvUESEqtM"
 
 [programs.devnet]
 stealth_registry = "E9LBRG5eP2kvuNfveouqQ9tA5P6nrpyLyWFjH9MFYVno"
 stealth_announcer = "HGFn2fH7bVQ5cSuiG52NjzN9m11YrB3FZUfoN9b9A5jf"
 groth16_verifier = "6mFaKyp7F4NqNeoiBLEWSqy5wJSk7rWf1EYumVXgHvhQ"
 reputation_verifier = "BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM"
+schema_registry = "FbgMJYGWnLKLcrKYS1NxM5uER1ihQkYLMTLs4STuDMWB"
+attestation_engine_v2 = "4T9kPCVCFGdEuLpEqRJihsPCbEEo2LWWDEPFvUESEqtM"
 
 [registry]
 url = "https://api.apr.dev"
