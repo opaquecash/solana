@@ -45,6 +45,14 @@ export interface OpaqueWasmModule {
     view_privkey_bytes: Uint8Array,
     spend_pubkey_bytes: Uint8Array
   ) => string;
+  scan_attestations_v2_wasm: (
+    announcements_json: string,
+    schemas_json: string,
+    view_privkey_bytes: Uint8Array,
+    spend_pubkey_bytes: Uint8Array,
+    current_slot: bigint,
+    trusted_issuers_json: string
+  ) => string;
   generate_reputation_witness: (
     attestations_json: string,
     target_trait_id: string,
