@@ -3,7 +3,19 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { TestnetBanner } from "./TestnetBanner";
 
-export type Tab = "dashboard" | "send" | "receive" | "balance" | "history" | "profile" | "reputation";
+export type Tab =
+  | "dashboard"
+  | "send"
+  | "receive"
+  | "balance"
+  | "history"
+  | "profile"
+  | "reputation"
+  // V2 tabs
+  | "schemas"
+  | "attest"
+  | "my-traits"
+  | "manage";
 
 type LayoutProps = {
   tab: Tab;
@@ -124,6 +136,7 @@ function DesktopNav({
                   {([
                     { id: "balance" as Tab, label: "Private balance" },
                     { id: "history" as Tab, label: "Transaction history" },
+                    { id: "manage" as Tab, label: "Manage" },
                     { id: "profile" as Tab, label: "Profile" },
                   ]).map((item) => (
                     <button
@@ -155,6 +168,8 @@ function DesktopNav({
 
 const mobileTabs: { id: Tab; label: string; icon: string }[] = [
   { id: "dashboard", label: "Home", icon: "⌂" },
+  { id: "reputation", label: "My Traits", icon: "✦" },
+  { id: "manage", label: "Manage", icon: "◈" },
   { id: "profile", label: "Profile", icon: "⚙" },
 ];
 

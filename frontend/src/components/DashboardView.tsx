@@ -41,7 +41,8 @@ const ACTION_CARDS: {
 const QUICK_LINKS: { id: Tab; label: string }[] = [
   { id: "balance", label: "Private balance" },
   { id: "history", label: "History" },
-  { id: "reputation", label: "Reputation" },
+  { id: "reputation", label: "My Traits" },
+  { id: "manage", label: "Manage" },
 ];
 
 export function DashboardView({ onNavigate, address, cluster }: DashboardViewProps) {

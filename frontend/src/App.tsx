@@ -13,7 +13,10 @@ import { TransactionHistoryView } from "./components/TransactionHistoryView";
 import { ReceiveView } from "./components/ReceiveView";
 import { ProfileView } from "./components/ProfileView";
 import { ProtocolLogPanel } from "./components/ProtocolLogPanel";
-import { ReputationDashboardView } from "./components/ReputationDashboardView";
+import { SchemaStudio } from "./components/SchemaStudio";
+import { AttestationManager } from "./components/AttestationManager";
+import { MyTraitsView } from "./components/MyTraitsView";
+import { ManageView } from "./components/ManageView";
 import { Layout, type Tab } from "./components/Layout";
 import { NetworkGuard } from "./components/NetworkGuard";
 import { useWallet } from "./hooks/useWallet";
@@ -96,7 +99,11 @@ function AppContent() {
     if (tab === "balance") return <PrivateBalanceView />;
     if (tab === "history") return <TransactionHistoryView />;
     if (tab === "profile") return <ProfileView onNavigate={setTab} onDisconnect={handleDisconnect} />;
-    if (tab === "reputation") return <ReputationDashboardView onBack={() => setTab("dashboard")} />;
+    if (tab === "reputation") return <MyTraitsView onNavigate={setTab} />;
+    if (tab === "schemas") return <SchemaStudio />;
+    if (tab === "attest") return <AttestationManager onNavigate={setTab} />;
+    if (tab === "my-traits") return <MyTraitsView onNavigate={setTab} />;
+    if (tab === "manage") return <ManageView onNavigate={setTab} />;
     return null;
   };
 
