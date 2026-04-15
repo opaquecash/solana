@@ -24,7 +24,8 @@
 [![Live App](https://img.shields.io/badge/app-live-00c48c?style=flat-square)](https://solana.opaque.cash)
 [![Demo](https://img.shields.io/badge/demo-YouTube-ff0000?style=flat-square)](https://youtu.be/NAo7j0-Yqa8)
 
-[**Live App**](https://solana.opaque.cash) · [**GitHub**](https://github.com/collinsadi/stealth-sol) · [**Watch Demo**](https://youtu.be/NAo7j0-Yqa8) · [**Ethereum Version**](https://github.com/collinsadi/opaque)
+[**Live App**](https://solana.opaque.cash) · [**GitHub**](https://github.com/collinsadi/stealth-sol) · [**Watch Demo**](https://youtu.be/NAo7j0-Yqa8) · [**Ethereum Version**](https://github.com/collinsadi/opaque) · [**Demo Attestation Gated App**](https://sol-demo.opaque.cash)
+
 
 </div>
 
