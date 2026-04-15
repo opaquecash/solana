@@ -1,0 +1,94 @@
+{
+  "address": "4T9kPCVCFGdEuLpEqRJihsPCbEEo2LWWDEPFvUESEqtM",
+  "metadata": {
+    "name": "attestation_engine_v2",
+    "version": "0.1.0",
+    "spec": "0.1.0"
+  },
+  "instructions": [
+    {
+      "name": "attest",
+      "accounts": [
+        { "name": "schema_pda", "isMut": false, "isSigner": false },
+        { "name": "attestation_pda", "isMut": true, "isSigner": false },
+        { "name": "issuer", "isMut": true, "isSigner": true },
+        { "name": "resolver_program", "isMut": false, "isSigner": false, "isOptional": true },
+        { "name": "system_program", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "stealth_address_hash", "type": { "array": ["u8", 32] } },
+        { "name": "data", "type": "bytes" },
+        { "name": "expiration_slot", "type": "u64" },
+        { "name": "ref_uid", "type": { "array": ["u8", 32] } }
+      ]
+    },
+    {
+      "name": "revoke",
+      "accounts": [
+        { "name": "schema_pda", "isMut": false, "isSigner": false },
+        { "name": "attestation_pda", "isMut": true, "isSigner": false },
+        { "name": "revoker", "isMut": false, "isSigner": true },
+        { "name": "resolver_program", "isMut": false, "isSigner": false, "isOptional": true }
+      ],
+      "args": [
+        { "name": "attestation_uid", "type": { "array": ["u8", 32] } }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "AttestationPDA",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "bump", "type": "u8" },
+          { "name": "uid", "type": { "array": ["u8", 32] } },
+          { "name": "schema_pda", "type": "publicKey" },
+          { "name": "schema_id", "type": { "array": ["u8", 32] } },
+          { "name": "issuer", "type": "publicKey" },
+          { "name": "stealth_address_hash", "type": { "array": ["u8", 32] } },
+          { "name": "data", "type": "bytes" },
+          { "name": "created_at", "type": "u64" },
+          { "name": "expiration_slot", "type": "u64" },
+          { "name": "revocation_slot", "type": "u64" },
+          { "name": "ref_uid", "type": { "array": ["u8", 32] } }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "AttestationCreated",
+      "fields": [
+        { "name": "uid", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "schema_id", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "issuer", "type": "publicKey", "index": false },
+        { "name": "stealth_address_hash", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "expiration_slot", "type": "u64", "index": false },
+        { "name": "created_at", "type": "u64", "index": false }
+      ]
+    },
+    {
+      "name": "AttestationRevoked",
+      "fields": [
+        { "name": "uid", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "schema_id", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "issuer", "type": "publicKey", "index": false },
+        { "name": "revocation_slot", "type": "u64", "index": false }
+      ]
+    }
+  ],
+  "errors": [
+    { "code": 6000, "name": "UnauthorizedIssuer", "msg": "Caller is not the schema authority or a registered delegate" },
+    { "code": 6001, "name": "SchemaInactive", "msg": "Schema is deprecated or expired — no new attestations accepted" },
+    { "code": 6002, "name": "DataTooLarge", "msg": "Attestation data exceeds 512-byte maximum" },
+    { "code": 6003, "name": "OnlyAuthorityCanRevoke", "msg": "Only the schema authority can revoke attestations" },
+    { "code": 6004, "name": "SchemaNotRevocable", "msg": "Schema is not marked as revocable" },
+    { "code": 6005, "name": "AlreadyRevoked", "msg": "Attestation has already been revoked" },
+    { "code": 6006, "name": "SchemaMismatch", "msg": "Schema on attestation does not match provided schema PDA" },
+    { "code": 6007, "name": "MissingResolverProgram", "msg": "Resolver program account is required but was not provided" },
+    { "code": 6008, "name": "ResolverMismatch", "msg": "Resolver program address does not match the schema's registered resolver" },
+    { "code": 6009, "name": "ResolverRejected", "msg": "Resolver rejected the attestation or revocation" },
+    { "code": 6010, "name": "AttestationNotFound", "msg": "Attestation UID does not match the attestation_pda account" }
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "address": "FbgMJYGWnLKLcrKYS1NxM5uER1ihQkYLMTLs4STuDMWB",
+  "metadata": {
+    "name": "schema_registry",
+    "version": "0.1.0",
+    "spec": "0.1.0"
+  },
+  "instructions": [
+    {
+      "name": "register_schema",
+      "accounts": [
+        { "name": "schema_pda", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": true, "isSigner": true },
+        { "name": "system_program", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "schema_id", "type": { "array": ["u8", 32] } },
+        { "name": "name", "type": "string" },
+        { "name": "field_definitions", "type": "string" },
+        { "name": "revocable", "type": "bool" },
+        { "name": "resolver", "type": { "option": "publicKey" } },
+        { "name": "schema_expiry_slot", "type": "u64" }
+      ]
+    },
+    {
+      "name": "add_delegate",
+      "accounts": [
+        { "name": "schema_pda", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true }
+      ],
+      "args": [
+        { "name": "delegate", "type": "publicKey" }
+      ]
+    },
+    {
+      "name": "remove_delegate",
+      "accounts": [
+        { "name": "schema_pda", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true }
+      ],
+      "args": [
+        { "name": "delegate", "type": "publicKey" }
+      ]
+    },
+    {
+      "name": "update_resolver",
+      "accounts": [
+        { "name": "schema_pda", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true }
+      ],
+      "args": [
+        { "name": "new_resolver", "type": "publicKey" }
+      ]
+    },
+    {
+      "name": "deprecate_schema",
+      "accounts": [
+        { "name": "schema_pda", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "SchemaPDA",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "bump", "type": "u8" },
+          { "name": "schema_id", "type": { "array": ["u8", 32] } },
+          { "name": "authority", "type": "publicKey" },
+          { "name": "resolver", "type": "publicKey" },
+          { "name": "revocable", "type": "bool" },
+          { "name": "name", "type": "string" },
+          { "name": "field_definitions", "type": "string" },
+          { "name": "version", "type": "u8" },
+          { "name": "delegates", "type": { "vec": "publicKey" } },
+          { "name": "created_at", "type": "u64" },
+          { "name": "schema_expiry_slot", "type": "u64" },
+          { "name": "deprecated", "type": "bool" }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "SchemaRegistered",
+      "fields": [
+        { "name": "schema_id", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "authority", "type": "publicKey", "index": false },
+        { "name": "name", "type": "string", "index": false },
+        { "name": "field_definitions", "type": "string", "index": false },
+        { "name": "revocable", "type": "bool", "index": false }
+      ]
+    },
+    {
+      "name": "DelegateAdded",
+      "fields": [
+        { "name": "schema_id", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "delegate", "type": "publicKey", "index": false }
+      ]
+    },
+    {
+      "name": "DelegateRemoved",
+      "fields": [
+        { "name": "schema_id", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "delegate", "type": "publicKey", "index": false }
+      ]
+    },
+    {
+      "name": "SchemaDeprecated",
+      "fields": [
+        { "name": "schema_id", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "deprecated_at", "type": "u64", "index": false }
+      ]
+    }
+  ],
+  "errors": [
+    { "code": 6000, "name": "NameTooLong", "msg": "Schema name must be at most 64 characters" },
+    { "code": 6001, "name": "FieldDefsTooLong", "msg": "Field definitions must be at most 256 characters" },
+    { "code": 6002, "name": "InvalidSchemaId", "msg": "Provided schema_id does not match SHA256(authority || name || version)" },
+    { "code": 6003, "name": "Unauthorized", "msg": "Caller is not the schema authority" },
+    { "code": 6004, "name": "DelegateLimitReached", "msg": "Schema already has 10 delegates (maximum)" },
+    { "code": 6005, "name": "DelegateAlreadyExists", "msg": "Delegate pubkey is already registered" },
+    { "code": 6006, "name": "DelegateNotFound", "msg": "Delegate pubkey was not found in the delegates list" },
+    { "code": 6007, "name": "AlreadyDeprecated", "msg": "Schema is already deprecated" }
+  ]
+}
