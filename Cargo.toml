@@ -4,6 +4,8 @@ members = [
     "programs/stealth-announcer",
     "programs/groth16-verifier",
     "programs/reputation-verifier",
+    "programs/schema-registry",
+    "programs/attestation-engine-v2",
 ]
 resolver = "2"
 
