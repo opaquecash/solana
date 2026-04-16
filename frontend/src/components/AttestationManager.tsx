@@ -12,6 +12,8 @@ import type { Tab } from "./Layout";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { useWallet } from "../hooks/useWallet";
 import { useSchemaStore } from "../store/schemaStore";
+import { useTxHistoryStore } from "../store/txHistoryStore";
+import { getCluster } from "../lib/chain";
 import { parseFieldDefs, SCHEMA_REGISTRY_PROGRAM_ID } from "../lib/schema";
 import { encodeAttestationData } from "../lib/attestationV2";
 import { computeStealthAddressAndViewTag } from "../lib/stealth";
@@ -36,6 +38,8 @@ interface AttestationManagerProps {
 export function AttestationManager({ onNavigate }: AttestationManagerProps = {}) {
   const { address: walletAddress, publicKey, sendTransaction, connection } = useWallet();
   const setSchemas = useSchemaStore((s) => s.setSchemas);
+  const pushTx = useTxHistoryStore((s) => s.push);
+  const cluster = getCluster();
   const setIsFetchingSchemas = useSchemaStore((s) => s.setIsFetchingSchemas);
   const isFetchingSchemas = useSchemaStore((s) => s.isFetchingSchemas);
   const schemaMap = useSchemaStore((s) => s.schemas);
@@ -293,6 +297,20 @@ export function AttestationManager({ onNavigate }: AttestationManagerProps = {})
       }
 
       setTxSig(signature);
+
+      // Log attestation issuance to transaction history
+      if (cluster) {
+        pushTx({
+          cluster,
+          kind: "trait",
+          counterparty: recipientInput.trim(),
+          amountLamports: "0",
+          tokenSymbol: "SOL",
+          tokenAddress: null,
+          amount: "0",
+          txHash: signature,
+        });
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to issue attestation";
       setError(msg);
