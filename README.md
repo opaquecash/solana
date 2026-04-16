@@ -96,25 +96,102 @@ Sweeps funds to main wallet ✓
 
 ### Private Reputation — The PSR System
 
+Most reputation systems fail at privacy: they require you to link your verified identity to your on-chain wallet. Opaque's Programmable Stealth Reputation (PSR) breaks this constraint. You prove you hold a credential — without revealing which address holds it, which wallet you control, or anything else about your on-chain history.
+
+#### How It Works End-to-End
+
 ```
-Issuer   →  Embeds attestation_id in stealth announcement metadata
-             (e.g., "KYC Verified" = attestation_id 7)
+Step 1 — Issuance
+──────────────────
+Issuer creates a Schema on-chain (e.g. "KYC Verified", "DAO Contributor",
+"Credit Score > 700"). The schema defines what fields the attestation contains
+and whether it is revocable.
 
-Recipient → Scanner discovers the trait privately via view-tag match
-             Trait surfaces silently in the Reputation Dashboard
+Issuer calls IssueAttestation with:
+  • recipient = keccak256(stealth_address)   ← never links to a wallet
+  • field data (ABI-encoded per schema)
+  • optional expiry slot
 
-Prover   →  Builds witness: stealth key + ephemeral pubkey + Merkle path
-             Generates Groth16 proof locally in-browser (snarkjs)
-             Nullifier = Poseidon(stealth_key, external_nullifier)
+Issuer also broadcasts an encrypted announcement on the StealthAnnouncer
+program with a V2 metadata marker (0xB2) that embeds:
+  • view tag (1 byte) — lets the recipient's scanner skip 99.6% of noise
+  • schema ID, issuer pubkey, attestation UID, random nonce
 
-Verifier →  Checks Merkle root is valid and not expired
-             CPI → Groth16 verifier (BN254 pairing via alt_bn128 syscalls)
-             Consumes nullifier → prevents replay attacks
-             Emits ReputationVerified event ✓
+Step 2 — Discovery
+───────────────────
+Recipient's WASM scanner (running in-browser, no server) loads all
+announcements, applies view-tag filtering, and re-derives stealth keys.
+For matching announcements with the 0xB2 marker, the scanner extracts
+the attestation metadata and surfaces the trait in the "My Traits" tab.
+The trait includes the Merkle leaf preimage needed for ZK proof generation.
 
-What's public:   attestation_id, nullifier hash, verification result
-What's private:  your wallet, your stealth address, all other traits
+Step 3 — Proof Generation
+──────────────────────────
+When the recipient wants to prove a trait to a verifier (e.g. a DeFi
+protocol gating access), they:
+
+  1. Build the Merkle witness locally (browser, no server):
+       leaf = Poseidon(stealth_pk_field, schema_id, issuer_pk_x,
+                       trait_data_hash, nonce_field)
+  2. Compute nullifier:
+       nullifier = Poseidon(stealth_private_key, external_nullifier)
+       (external_nullifier is provided by the verifying protocol)
+  3. Run snarkjs Groth16 prover in-browser using the compiled circuit
+  4. Get back a 256-byte proof + public signals
+
+Step 4 — On-Chain Verification
+────────────────────────────────
+Recipient submits the proof to the OpaqueReputationVerifier program:
+
+  Verifier checks:
+    ✓ Merkle root matches the on-chain registry (attestation exists)
+    ✓ Schema is not deprecated and not expired
+    ✓ Nullifier has not been consumed (prevents replay attacks)
+    ✓ Groth16 proof is valid — via CPI to the Groth16Verifier program
+       which uses Solana's native alt_bn128 syscalls for BN254 pairing
+
+  On success:
+    • Nullifier stored on-chain (Sybil resistance)
+    • ReputationVerified event emitted ✓
+
+What's public:   attestation schema ID, nullifier hash, verification result
+What's private:  your wallet, your stealth address, all other traits,
+                 the issuer's knowledge of which wallet you control
 ```
+
+#### Security Model
+
+**What an attacker sees on-chain:**
+- A schema PDA with a field definition and an authority pubkey
+- An attestation PDA with a keccak256 hash (no address, no identity)
+- An announcement with an encrypted ephemeral key and scrambled metadata
+- A nullifier hash when you verify (reveals nothing about who you are)
+
+**What an attacker cannot derive:**
+- Which wallet received an attestation (the hash reveals nothing without the stealth key)
+- Which stealth address you control (DKSAP ensures only you can scan your announcements)
+- Whether two verifications were made by the same person (each nullifier uses the verifier's external nullifier — cross-protocol linkage is cryptographically prevented)
+- Any other traits you hold (proof reveals only the requested schema)
+
+**Cryptographic guarantees:**
+- **Binding:** You cannot forge an attestation — the Merkle leaf commits to the actual issuer pubkey and the on-chain schema authority is verified
+- **Soundness:** The Groth16 circuit enforces that the nullifier was derived from the actual stealth private key, not a fabricated one
+- **Zero-knowledge:** snarkjs Groth16 on BN254 provides computational zero-knowledge — the proof reveals nothing beyond "this person holds a valid attestation under schema X"
+- **Replay prevention:** Nullifiers are consumed on-chain. The same credential cannot be used twice for the same external nullifier
+- **Revocation:** Issuers can revoke attestations. The on-chain revocationSlot field is checked by the verifier before accepting a proof
+
+**Trust assumptions:**
+- The issuer is trusted to issue accurate attestations (this is the same trust model as any credential system — e.g. a KYC provider, DAO governance, employer)
+- The ZK proving key was generated with a trusted setup ceremony (powers of tau)
+- Solana consensus is not compromised (standard on-chain assumption)
+
+#### Why This Matters
+
+Without PSR, the only way to prove reputation on Solana is to reveal your wallet — permanently linking your identity to every transaction you've ever made. This creates a paradox: the more reputation you build, the more exposed you become.
+
+PSR breaks this paradox. You accumulate credentials privately, under stealth addresses. You reveal only what you choose, when you choose, to the specific protocol that needs it. The proof is mathematically binding — the verifier gets the same confidence as a public wallet check, without any of the privacy cost.
+
+This is the missing primitive for DeFi compliance, private DAO governance, privacy-preserving KYC, and any system where trust must be established without surveillance.
 
 ---
 
