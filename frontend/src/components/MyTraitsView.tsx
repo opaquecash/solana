@@ -33,6 +33,53 @@ import { useWatchlistStore } from "../hooks/useWatchlist";
 import { ProofGeneratorModal } from "./ProofGeneratorModal";
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+const ITEMS_PER_PAGE = 10;
+
+// =============================================================================
+// Pagination
+// =============================================================================
+
+function PaginationControls({
+  page,
+  totalPages,
+  onPrev,
+  onNext,
+}: {
+  page: number;
+  totalPages: number;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-center gap-3 pt-2">
+      <button
+        type="button"
+        onClick={onPrev}
+        disabled={page === 1}
+        className="rounded-lg border border-ink-700 bg-ink-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-ink-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        ← Prev
+      </button>
+      <span className="text-xs text-mist">
+        Page {page} of {totalPages}
+      </span>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={page === totalPages}
+        className="rounded-lg border border-ink-700 bg-ink-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-ink-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        Next →
+      </button>
+    </div>
+  );
+}
+
+// =============================================================================
 // Status badge
 // =============================================================================
 
@@ -193,6 +240,7 @@ export function MyTraitsView({ onNavigate }: MyTraitsViewProps = {}) {
 
   const [activeProofTrait, setActiveProofTrait] = useState<V2DiscoveredTrait | null>(null);
   const [filter, setFilter] = useState<"all" | "active" | "revoked">("all");
+  const [traitsPage, setTraitsPage] = useState(1);
 
   const allTraits = useMemo(
     () => Object.values(discoveredTraitsMap),
@@ -211,6 +259,18 @@ export function MyTraitsView({ onNavigate }: MyTraitsViewProps = {}) {
       }),
     [v2Traits, filter]
   );
+
+  const totalTraitsPages = Math.max(1, Math.ceil(filteredV2.length / ITEMS_PER_PAGE));
+
+  const pagedTraits = useMemo(() => {
+    const start = (traitsPage - 1) * ITEMS_PER_PAGE;
+    return filteredV2.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredV2, traitsPage]);
+
+  // Reset page when filter changes
+  useEffect(() => {
+    setTraitsPage(1);
+  }, [filter]);
 
   const rescan = useCallback(async () => {
     if (!cluster) {
@@ -473,10 +533,18 @@ export function MyTraitsView({ onNavigate }: MyTraitsViewProps = {}) {
 
       {/* V2 traits */}
       {filteredV2.length > 0 ? (
-        <div className="space-y-3">
-          {filteredV2.map((trait) => (
-            <TraitCard key={trait.attestationUid} trait={trait} onProve={setActiveProofTrait} />
-          ))}
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {pagedTraits.map((trait) => (
+              <TraitCard key={trait.attestationUid} trait={trait} onProve={setActiveProofTrait} />
+            ))}
+          </div>
+          <PaginationControls
+            page={traitsPage}
+            totalPages={totalTraitsPages}
+            onPrev={() => setTraitsPage((p) => Math.max(1, p - 1))}
+            onNext={() => setTraitsPage((p) => Math.min(totalTraitsPages, p + 1))}
+          />
         </div>
       ) : (
         <div className="rounded-xl border border-ink-800 bg-ink-900/50 px-6 py-10 text-center space-y-3">
@@ -510,7 +578,7 @@ export function MyTraitsView({ onNavigate }: MyTraitsViewProps = {}) {
               They remain valid for V1 verifiers during the migration window.
             </p>
           </div>
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {v1Traits.map((trait) => (
               <TraitCard key={trait.attestationUid} trait={trait} onProve={() => {}} />
             ))}
