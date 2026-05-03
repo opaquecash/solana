@@ -22,9 +22,9 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-5c7cfa?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Solana Devnet](https://img.shields.io/badge/network-Solana%20Devnet-9945ff?style=flat-square)](https://solana.opaque.cash)
 [![Live App](https://img.shields.io/badge/app-live-00c48c?style=flat-square)](https://solana.opaque.cash)
-[![Demo](https://img.shields.io/badge/demo-YouTube-ff0000?style=flat-square)](https://youtu.be/NAo7j0-Yqa8)
+[![Demo](https://img.shields.io/badge/demo-YouTube-ff0000?style=flat-square)](https://youtu.be/s2XDjNAAk4Q)
 
-[**Live App**](https://solana.opaque.cash) · [**GitHub**](https://github.com/collinsadi/stealth-sol) · [**Watch Demo**](https://youtu.be/NAo7j0-Yqa8) · [**Ethereum Version**](https://github.com/collinsadi/opaque) · [**Demo Attestation Gated App**](https://sol-demo.opaque.cash)
+[**Live App**](https://solana.opaque.cash) · [**GitHub**](https://github.com/collinsadi/opaque-solana) · [**Watch Demo**](https://youtu.be/s2XDjNAAk4Q) · [**Ethereum Version**](https://github.com/collinsadi/opaque) · [**Demo Attestation Gated App**](https://sol-demo.opaque.cash)
 
 
 </div>
@@ -327,8 +327,8 @@ The deeper you look at Opaque, the more separation you'll find from everything e
 ### 1. Clone
 
 ```bash
-git clone https://github.com/collinsadi/stealth-sol.git
-cd stealth-sol
+git clone https://github.com/collinsadi/opaque-solana.git
+cd opaque-solana
 ```
 
 ### 2. Build & Deploy Solana Programs
