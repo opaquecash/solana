@@ -1,9 +1,7 @@
 import { useState } from "react";
 import { useWallet } from "../hooks/useWallet";
 import { useKeys } from "../context/KeysContext";
-
-const SETUP_MESSAGE =
-  "Sign this message to derive your Opaque Cash stealth keys. This does not approve any transaction.";
+import { SETUP_MESSAGE } from "../lib/stealth";
 
 export function SetupView() {
   const { setFromSignature, stealthMetaAddressHex, isSetup } = useKeys();

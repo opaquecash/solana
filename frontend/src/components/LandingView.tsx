@@ -5,7 +5,7 @@ import { getCluster, getRpcUrl } from "../lib/chain";
 import { useKeys } from "../context/KeysContext";
 import { isRegistered } from "../lib/registry";
 import { buildRegisterKeysInstruction, SCHEME_ID_SECP256K1 } from "../lib/contracts";
-import { hexToBytes, type Hex } from "../lib/stealth";
+import { hexToBytes, SETUP_MESSAGE, type Hex } from "../lib/stealth";
 import { getConfigForCluster } from "../contracts/contract-config";
 import {
   getRememberSignaturePreference,
@@ -13,9 +13,6 @@ import {
   saveSignatureSession,
   setRememberSignaturePreference,
 } from "../lib/signatureSession";
-
-const SETUP_MESSAGE =
-  "Sign this message to derive your Opaque Cash stealth keys on Solana. This is not a transaction and does not move funds.";
 
 type Phase = "idle" | "restoring" | "connecting" | "signing" | "checking" | "register" | "registering" | "done" | "error";
 

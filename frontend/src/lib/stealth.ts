@@ -25,6 +25,33 @@ const DOMAIN = "opaque-cash-v1";
 export type Hex = `0x${string}`;
 
 // -----------------------------------------------------------------------------
+// Canonical key-derivation message (CSAP §2.2)
+// -----------------------------------------------------------------------------
+
+/**
+ * The ONE canonical message every Opaque entry point must ask the wallet to sign
+ * before deriving stealth keys. It is chain-neutral on purpose: a given wallet must
+ * derive the same key set regardless of which view it onboards through.
+ *
+ * MUST match `spec/CSAP.md` §2.2 exactly (byte-for-byte). Do not redefine this string
+ * anywhere else — import it. A regression test pins it to the spec value.
+ */
+export const SETUP_MESSAGE =
+  "Sign this message to derive your Opaque Cash stealth keys. This does not approve any transaction.";
+
+/**
+ * Legacy messages that earlier builds signed on Solana before the message was
+ * standardised. A wallet that onboarded through the old LandingView/RegistrationWizard
+ * signed the string below, deriving a DIFFERENT key set (and meta-address) than the
+ * canonical one. These are kept ONLY so the migration scan (see
+ * `deriveLegacyKeyCandidates`) can still discover and sweep funds at the old key set.
+ * Never sign these for new derivations.
+ */
+export const LEGACY_SOLANA_SETUP_MESSAGES: readonly string[] = [
+  "Sign this message to derive your Opaque Cash stealth keys on Solana. This is not a transaction and does not move funds.",
+];
+
+// -----------------------------------------------------------------------------
 // Key derivation from wallet signature (entropy)
 // -----------------------------------------------------------------------------
 
@@ -71,6 +98,52 @@ export function keysToStealthMetaAddress(
  */
 export function stealthMetaAddressToHex(metaAddress: Uint8Array): Hex {
   return ("0x" + bytesToHex(metaAddress)) as Hex;
+}
+
+// -----------------------------------------------------------------------------
+// Legacy key-set migration (CSAP §2.2 — "scan both strings")
+// -----------------------------------------------------------------------------
+
+export type LegacyKeyCandidate = {
+  /** The legacy message whose signature produced this key set. */
+  message: string;
+  viewingKey: Uint8Array;
+  spendingKey: Uint8Array;
+  /** Legacy stealth meta-address (0x + 66 hex) to scan for orphaned funds. */
+  metaAddressHex: Hex;
+};
+
+/**
+ * Derive the stealth key sets a wallet would have had under earlier signing
+ * messages ({@link LEGACY_SOLANA_SETUP_MESSAGES}). Pure: the caller asks the wallet
+ * to sign each legacy message and passes the signatures index-aligned with `messages`.
+ *
+ * Why this exists: before the message was standardised, the Solana LandingView /
+ * RegistrationWizard signed a different string than SetupView, so the same wallet
+ * derived a DIFFERENT key set (and meta-address) depending on the onboarding path.
+ * Now that every entry point signs {@link SETUP_MESSAGE}, those users would otherwise
+ * lose sight of funds sent to the old meta-address.
+ *
+ * Migration flow (scan-both): on a returning Solana wallet — (1) derive canonical keys
+ * from SETUP_MESSAGE as usual; (2) call this with signatures over each legacy message;
+ * (3) scan each returned `metaAddressHex` for announcements/funds; (4) if any are found,
+ * sweep them to the canonical stealth address and stop offering migration for that
+ * wallet. New derivations MUST always use SETUP_MESSAGE — never a legacy message.
+ */
+export function deriveLegacyKeyCandidates(
+  legacySignatures: ReadonlyArray<Hex | string>,
+  messages: readonly string[] = LEGACY_SOLANA_SETUP_MESSAGES,
+): LegacyKeyCandidate[] {
+  return legacySignatures.map((sig, i) => {
+    const { viewingKey, spendingKey } = deriveKeysFromSignature(sig);
+    const { metaAddress } = keysToStealthMetaAddress(viewingKey, spendingKey);
+    return {
+      message: messages[i] ?? LEGACY_SOLANA_SETUP_MESSAGES[0],
+      viewingKey,
+      spendingKey,
+      metaAddressHex: stealthMetaAddressToHex(metaAddress),
+    };
+  });
 }
 
 /**
