@@ -348,8 +348,13 @@ After deploying, update program IDs in `Anchor.toml` and `frontend/src/contracts
 
 ### 3. Build the Scanner (WASM)
 
+The scanner is the canonical [`opaque-scanner`](https://crates.io/crates/opaque-scanner)
+crate ([opaquecash/scanner](https://github.com/opaquecash/scanner)); it is no longer
+vendored in this repo. Build the browser WASM from it:
+
 ```bash
-cd scanner
+git clone https://github.com/opaquecash/scanner.git opaque-scanner
+cd opaque-scanner
 wasm-pack build --target web --out-dir ../frontend/src/wasm
 cd ..
 ```
