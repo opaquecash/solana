@@ -285,6 +285,9 @@ The Solana privacy ecosystem has a persistent pattern: projects build useful pri
 | **StealthAddressAnnouncer** | `HGFn2fH7bVQ5cSuiG52NjzN9m11YrB3FZUfoN9b9A5jf` | [View →](https://explorer.solana.com/address/HGFn2fH7bVQ5cSuiG52NjzN9m11YrB3FZUfoN9b9A5jf?cluster=devnet) |
 | **Groth16Verifier** | `6mFaKyp7F4NqNeoiBLEWSqy5wJSk7rWf1EYumVXgHvhQ` | [View →](https://explorer.solana.com/address/6mFaKyp7F4NqNeoiBLEWSqy5wJSk7rWf1EYumVXgHvhQ?cluster=devnet) |
 | **OpaqueReputationVerifier** | `BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM` | [View →](https://explorer.solana.com/address/BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM?cluster=devnet) |
+| **uab_receiver** (Universal Announcement Bus) | `7d4Sbmmpy954JwSNdjwf31pgbeWUQqwpgNdte5iy3vuM` | [View →](https://explorer.solana.com/address/7d4Sbmmpy954JwSNdjwf31pgbeWUQqwpgNdte5iy3vuM?cluster=devnet) |
+
+`stealth_announcer` also gained `announce_with_relay` (cross-chain announce via Wormhole). The UAB cross-chain transport is specified in `opaquecash/spec` (UAB.md).
 
 ---
 
