@@ -6,6 +6,7 @@ members = [
     "programs/reputation-verifier",
     "programs/schema-registry",
     "programs/attestation-engine-v2",
+    "programs/uab-receiver",
 ]
 resolver = "2"
 

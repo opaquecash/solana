@@ -9,6 +9,7 @@ groth16_verifier = "6mFaKyp7F4NqNeoiBLEWSqy5wJSk7rWf1EYumVXgHvhQ"
 reputation_verifier = "BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM"
 schema_registry = "FbgMJYGWnLKLcrKYS1NxM5uER1ihQkYLMTLs4STuDMWB"
 attestation_engine_v2 = "4T9kPCVCFGdEuLpEqRJihsPCbEEo2LWWDEPFvUESEqtM"
+uab_receiver = "7d4Sbmmpy954JwSNdjwf31pgbeWUQqwpgNdte5iy3vuM"
 
 [programs.devnet]
 stealth_registry = "E9LBRG5eP2kvuNfveouqQ9tA5P6nrpyLyWFjH9MFYVno"
@@ -17,6 +18,7 @@ groth16_verifier = "6mFaKyp7F4NqNeoiBLEWSqy5wJSk7rWf1EYumVXgHvhQ"
 reputation_verifier = "BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM"
 schema_registry = "FbgMJYGWnLKLcrKYS1NxM5uER1ihQkYLMTLs4STuDMWB"
 attestation_engine_v2 = "4T9kPCVCFGdEuLpEqRJihsPCbEEo2LWWDEPFvUESEqtM"
+uab_receiver = "7d4Sbmmpy954JwSNdjwf31pgbeWUQqwpgNdte5iy3vuM"
 
 [registry]
 url = "https://api.apr.dev"
