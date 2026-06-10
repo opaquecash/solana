@@ -1,0 +1,52 @@
+name: Programs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  SOLANA_VERSION: v3.1.13
+  ANCHOR_VERSION: 0.32.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            ~/.cargo/bin
+            ~/.avm
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install Anchor ${{ env.ANCHOR_VERSION }}
+        run: |
+          if ! command -v anchor >/dev/null || [ "$(anchor --version | awk '{print $2}')" != "$ANCHOR_VERSION" ]; then
+            cargo install --git https://github.com/solana-foundation/anchor avm --locked --force
+            avm install "$ANCHOR_VERSION"
+            avm use "$ANCHOR_VERSION"
+          fi
+          anchor --version
+
+      - name: Build
+        run: anchor build
+
+      # Phase 1.6 adds tests/ (registry, announcer, UAB receiver, PSR V2).
+      # This step activates automatically once that directory lands.
+      - name: Test
+        run: |
+          if [ -d tests ]; then
+            solana-keygen new --no-bip39-passphrase --silent || true
+            anchor test
+          else
+            echo "No tests/ yet (Phase 1.6) — skipping"
+          fi
