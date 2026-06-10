@@ -19,6 +19,7 @@
 
 <br/>
 
+[![CI](https://github.com/opaquecash/solana/actions/workflows/solana-programs.yml/badge.svg)](https://github.com/opaquecash/solana/actions/workflows/solana-programs.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-5c7cfa?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Solana Devnet](https://img.shields.io/badge/network-Solana%20Devnet-9945ff?style=flat-square)](https://solana.opaque.cash)
 [![Live App](https://img.shields.io/badge/app-live-00c48c?style=flat-square)](https://solana.opaque.cash)
