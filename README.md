@@ -309,7 +309,7 @@ The deeper you look at Opaque, the more separation you'll find from everything e
 
 | Path | Contents |
 |:-----|:---------|
-| [`frontend/`](frontend/) | React/TS reference UI — send, receive, private balance, reputation dashboard |
+| [opaquecash/app](https://github.com/opaquecash/app) | React/TS reference UI — send, receive, private balance, reputation dashboard |
 | [`programs/`](programs/) | Anchor programs — Registry, Announcer, Groth16 Verifier, Reputation Verifier |
 | [`circuits/`](circuits/) | Circom ZK circuit for stealth attestation proofs (Groth16, Merkle depth-20) |
 | [`scanner/`](scanner/) | Rust WASM core — DKSAP engine, view-tag filtering, attestation detection, Merkle tree |
@@ -347,7 +347,7 @@ anchor deploy
 anchor test
 ```
 
-After deploying, update program IDs in `Anchor.toml` and `frontend/src/contracts/deployed-addresses.json` with the output from `anchor deploy`.
+After deploying, update program IDs in `Anchor.toml` and [`src/contracts/deployed-addresses.json`](https://github.com/opaquecash/app/blob/main/src/contracts/deployed-addresses.json) in the [app repo](https://github.com/opaquecash/app) with the output from `anchor deploy`.
 
 ### 3. Build the Scanner (WASM)
 
@@ -357,15 +357,19 @@ vendored in this repo. Build the browser WASM from it:
 
 ```bash
 git clone https://github.com/opaquecash/scanner.git opaque-scanner
+git clone https://github.com/opaquecash/app.git opaque-app
 cd opaque-scanner
-wasm-pack build --target web --out-dir ../frontend/src/wasm
+wasm-pack build --target web --out-dir ../opaque-app/src/wasm
 cd ..
 ```
 
 ### 4. Run the Frontend
 
+The UI lives in the standalone [opaquecash/app](https://github.com/opaquecash/app) repository:
+
 ```bash
-cd frontend
+git clone https://github.com/opaquecash/app.git
+cd app
 npm install
 echo "VITE_SOLANA_CLUSTER=devnet" > .env
 npm run dev
