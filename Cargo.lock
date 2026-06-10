@@ -1146,6 +1146,8 @@ name = "groth16-verifier"
 version = "0.1.0"
 dependencies = [
  "anchor-lang 0.32.1",
+ "num-bigint",
+ "serde_json",
  "solana-bn254",
 ]
 

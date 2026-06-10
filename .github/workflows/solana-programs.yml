@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # groth16-verifier tests verify the proof fixture from circuits/
+          submodules: true
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -44,6 +47,11 @@ jobs:
       # --no-idl: anchor-syn 0.30.1 (attestation-engine-v2, schema-registry)
       # cannot compile its IDL generator under current rustc. IDLs are
       # committed; re-enable IDL build once those programs move to 0.32.
+      # Native (off-chain) unit tests — verifies the real V2 proof fixture
+      # against the program's hard-coded verification key via solana-bn254.
+      - name: Cargo tests
+        run: cargo test -p groth16-verifier
+
       - name: Build
         run: anchor build --no-idl
 
