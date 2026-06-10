@@ -55,14 +55,17 @@ pub mod reputation_verifier {
         Ok(())
     }
 
-    /// Verify a Stealth Attestation ZK-SNARK proof.
+    /// Verify a V2 stealth-reputation ZK-SNARK proof.
     ///
-    /// Public signals layout (matching the Circom circuit):
-    ///   [0] nullifier           (circuit output)
-    ///   [1] is_valid            (circuit output, must be 1)
-    ///   [2] merkle_root         (public input)
-    ///   [3] attestation_id      (public input)
-    ///   [4] external_nullifier  (public input)
+    /// V2 public signals (matching `circuits/v2/stealth_reputation.circom`):
+    ///   [0] merkle_root         (public input)
+    ///   [1] attestation_id      (= schema_id, public input)
+    ///   [2] external_nullifier  (public input)
+    ///   [3] nullifier_hash      (Poseidon(stealth_pk, external_nullifier), public input)
+    ///
+    /// `attestation_id` / `external_nullifier` cross the boundary as `u64` and are
+    /// packed big-endian into 32 bytes — the prover MUST pack them identically
+    /// when building the witness (see spec/PSR.md §field encoding).
     pub fn verify_reputation(
         ctx: Context<VerifyReputation>,
         proof_a: [u8; 64],
@@ -71,7 +74,7 @@ pub mod reputation_verifier {
         root: [u8; 32],
         attestation_id: u64,
         external_nullifier: u64,
-        nullifier: [u8; 32],
+        nullifier_hash: [u8; 32],
     ) -> Result<()> {
         // Check root is valid and not expired
         let root_entry = &ctx.accounts.root_entry;
@@ -81,30 +84,23 @@ pub mod reputation_verifier {
             ReputationError::RootExpired
         );
 
-        // Build public signals array
-        let mut pub_signals = [[0u8; 32]; 5];
-        pub_signals[0] = nullifier;
-        pub_signals[1] = {
-            let mut one = [0u8; 32];
-            one[31] = 1;
-            one
-        };
-        pub_signals[2] = root;
-        pub_signals[3] = u64_to_be32(attestation_id);
-        pub_signals[4] = u64_to_be32(external_nullifier);
-
-        // CPI to the Groth16 verifier
+        // CPI to the Groth16 verifier (V2 entry point, 4 public signals)
         let cpi_program = ctx.accounts.groth16_program.to_account_info();
         let cpi_accounts = groth16_verifier::cpi::accounts::VerifyProof {
             caller: ctx.accounts.user.to_account_info(),
         };
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-        let valid = groth16_verifier::cpi::verify_proof(
+        let valid = groth16_verifier::cpi::verify_proof_v2(
             cpi_ctx,
             proof_a,
             proof_b,
             proof_c,
-            pub_signals,
+            groth16_verifier::VerifyPublicInputsV2 {
+                merkle_root: root,
+                attestation_id: u64_to_be32(attestation_id),
+                external_nullifier: u64_to_be32(external_nullifier),
+                nullifier_hash,
+            },
         )?;
 
         require!(
@@ -119,7 +115,7 @@ pub mod reputation_verifier {
 
         emit!(ReputationVerified {
             attestation_id,
-            nullifier,
+            nullifier_hash,
             verifier: ctx.accounts.user.key(),
             merkle_root: root,
         });
@@ -137,7 +133,7 @@ pub mod reputation_verifier {
         root: [u8; 32],
         attestation_id: u64,
         external_nullifier: u64,
-        nullifier: [u8; 32],
+        nullifier_hash: [u8; 32],
     ) -> Result<bool> {
         let root_entry = &ctx.accounts.root_entry;
         let now = Clock::get()?.unix_timestamp;
@@ -145,28 +141,22 @@ pub mod reputation_verifier {
             return Ok(false);
         }
 
-        let mut pub_signals = [[0u8; 32]; 5];
-        pub_signals[0] = nullifier;
-        pub_signals[1] = {
-            let mut one = [0u8; 32];
-            one[31] = 1;
-            one
-        };
-        pub_signals[2] = root;
-        pub_signals[3] = u64_to_be32(attestation_id);
-        pub_signals[4] = u64_to_be32(external_nullifier);
-
         let cpi_program = ctx.accounts.groth16_program.to_account_info();
         let cpi_accounts = groth16_verifier::cpi::accounts::VerifyProof {
             caller: ctx.accounts.user.to_account_info(),
         };
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-        let valid = groth16_verifier::cpi::verify_proof(
+        let valid = groth16_verifier::cpi::verify_proof_v2(
             cpi_ctx,
             proof_a,
             proof_b,
             proof_c,
-            pub_signals,
+            groth16_verifier::VerifyPublicInputsV2 {
+                merkle_root: root,
+                attestation_id: u64_to_be32(attestation_id),
+                external_nullifier: u64_to_be32(external_nullifier),
+                nullifier_hash,
+            },
         )?;
 
         Ok(valid.get())
@@ -263,7 +253,7 @@ pub struct UpdateMerkleRoot<'info> {
     root: [u8; 32],
     attestation_id: u64,
     external_nullifier: u64,
-    nullifier: [u8; 32],
+    nullifier_hash: [u8; 32],
 )]
 pub struct VerifyReputation<'info> {
     #[account(seeds = [b"verifier_config"], bump = config.bump)]
@@ -279,7 +269,7 @@ pub struct VerifyReputation<'info> {
         init,
         payer = user,
         space = NullifierEntry::SPACE,
-        seeds = [b"nullifier", nullifier.as_ref()],
+        seeds = [b"nullifier", nullifier_hash.as_ref()],
         bump,
     )]
     pub nullifier_entry: Account<'info, NullifierEntry>,
@@ -302,7 +292,7 @@ pub struct VerifyReputation<'info> {
     root: [u8; 32],
     attestation_id: u64,
     external_nullifier: u64,
-    nullifier: [u8; 32],
+    nullifier_hash: [u8; 32],
 )]
 pub struct VerifyReputationView<'info> {
     #[account(seeds = [b"verifier_config"], bump = config.bump)]
@@ -382,7 +372,7 @@ impl RootHistory {
 #[event]
 pub struct ReputationVerified {
     pub attestation_id: u64,
-    pub nullifier: [u8; 32],
+    pub nullifier_hash: [u8; 32],
     pub verifier: Pubkey,
     pub merkle_root: [u8; 32],
 }
