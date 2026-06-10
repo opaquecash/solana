@@ -1,10 +1,10 @@
 /**
- * Checks whether the connected wallet has a stealth meta-address registered on the current cluster.
- * Re-runs automatically when address or cluster changes.
+ * Checks whether the connected wallet has a stealth meta-address registered on Solana, via the
+ * active `OpaqueClient`. Re-runs when the client, address, or cluster changes.
  */
 
 import { useState, useEffect } from "react";
-import { isRegistered } from "../lib/registry";
+import { useOpaqueStore } from "../opaque/store";
 
 export type RegistrationStatus = {
   isRegistered: boolean;
@@ -15,11 +15,12 @@ export function useRegistrationStatus(
   address: string | null,
   cluster: string | null
 ): RegistrationStatus {
+  const client = useOpaqueStore((s) => s.client);
   const [isRegisteredOnChain, setIsRegisteredOnChain] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (!address || cluster == null) {
+    if (!client || !address || cluster == null) {
       setIsRegisteredOnChain(false);
       setIsLoading(false);
       return;
@@ -28,27 +29,22 @@ export function useRegistrationStatus(
     let cancelled = false;
     setIsLoading(true);
 
-    isRegistered(address)
+    client
+      .isMetaAddressRegistered("solana")
       .then((registered) => {
-        if (!cancelled) {
-          setIsRegisteredOnChain(registered);
-        }
+        if (!cancelled) setIsRegisteredOnChain(registered);
       })
       .catch(() => {
-        if (!cancelled) {
-          setIsRegisteredOnChain(false);
-        }
+        if (!cancelled) setIsRegisteredOnChain(false);
       })
       .finally(() => {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
+        if (!cancelled) setIsLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [address, cluster]);
+  }, [client, address, cluster]);
 
   return { isRegistered: isRegisteredOnChain, isLoading };
 }

@@ -1,8 +1,25 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { deriveStealthSolanaAddressFromStealthPrivKey, formatSol, hexToBytes } from "../lib/stealth";
-import { getRpcUrl, getCluster, type SolanaCluster } from "../lib/chain";
-import { getConfigForCluster } from "../contracts/contract-config";
+import type { Hex } from "viem";
+import {
+  ephemeralPrivateKeyToCompressedPublicKey,
+  type UnifiedOwnedOutput,
+} from "@opaquecash/opaque";
+import { formatSol, hexToBytes, bytesToHex, shortenAddress } from "../lib/format";
+import { getRpcUrl, getCluster } from "../lib/chain";
+import { useOpaqueSession } from "../opaque/useOpaqueSession";
+import { useWallet } from "../hooks/useWallet";
+import type { ProtocolStep } from "./ProtocolStepper";
+import { ClaimModal } from "./ClaimModal";
+import { useProtocolLog } from "../context/ProtocolLogContext";
+import { useTxHistoryStore } from "../store/txHistoryStore";
+import { useGhostAddressStore } from "../store/ghostAddressStore";
+import { useWatchlist, useWatchlistStore } from "../hooks/useWatchlist";
+import { useToast } from "../context/ToastContext";
+import { getNativeToken } from "../lib/tokens";
+import type { TokenInfo } from "../lib/tokens";
+import { ExplorerLink } from "./ExplorerLink";
+import { ModalShell } from "./ModalShell";
 
 function isAddress(a: string): boolean {
   const t = a.trim();
@@ -14,347 +31,187 @@ function isAddress(a: string): boolean {
     return false;
   }
 }
-import { useOpaqueWasm } from "../hooks/useOpaqueWasm";
-import { useScanner } from "../hooks/useScanner";
-import type { CachedAnnouncement } from "../lib/opaqueCache";
-import { useKeys } from "../context/KeysContext";
-import { useWallet } from "../hooks/useWallet";
-import { executeStealthWithdrawal, withdrawFromGhostAddress } from "../lib/stealthLifecycle";
-import type { MasterKeys } from "../lib/stealthLifecycle";
-import type { ProtocolStep } from "./ProtocolStepper";
-import type { OpaqueWasmModule } from "../hooks/useOpaqueWasm";
-import { useReputationStore } from "../store/reputationStore";
-import { getTraitByAttestationId, StealthAttestationArraySchema, type DiscoveredTrait } from "../lib/reputation";
-import { ClaimModal } from "./ClaimModal";
-import { useProtocolLog } from "../context/ProtocolLogContext";
-import { useTxHistoryStore } from "../store/txHistoryStore";
-import { useGhostAddressStore } from "../store/ghostAddressStore";
-import { useWatchlist, useWatchlistStore } from "../hooks/useWatchlist";
-import { useVaultStore } from "../store/vaultStore";
-import { useToast } from "../context/ToastContext";
-import { secp256k1 } from "@noble/curves/secp256k1";
-import { getNativeToken } from "../lib/tokens";
-import type { TokenInfo } from "../lib/tokens";
-import { ExplorerLink } from "./ExplorerLink";
-import { ghostAnnouncementEntryKey, useGhostAnnouncementStore } from "../store/ghostAnnouncementStore";
-import { GhostAnnounceModal } from "./GhostAnnounceModal";
-import { ModalShell } from "./ModalShell";
 
 export type FoundTx = {
   id: string;
+  /** Scanner stealth address (0x EVM-style) — used for display + matching. */
   address: string;
-  stealthSolanaAddress?: string;
+  /** Actual Solana account holding the funds. */
+  solanaAddress?: string;
   balance: bigint;
-  privateKey: string | undefined;
+  /** 33-byte compressed ephemeral pubkey (hex) the SDK sweeps from. */
+  ephemeralPublicKey?: string;
   txHash: string;
   blockNumber: number;
-  timestamp?: number;
   isSpent?: boolean;
-  source?: "announcement" | "manual";
+  source: "announcement" | "manual" | "watch";
 };
 
-function viewTagFromMetadata(metadata: string | undefined): number {
-  if (!metadata || metadata.length < 2) return 0;
-  return parseInt(metadata.slice(2, 4), 16);
-}
-
-function toHexBytes(hex: string): Uint8Array {
-  const normalized = hex.startsWith("0x") ? hex : `0x${hex}`;
-  return hexToBytes(normalized as `0x${string}`);
-}
-
-function cachedToLogWithArgs(c: CachedAnnouncement): LogWithArgs {
+/** Build a UnifiedOwnedOutput-shaped record for a ghost's stored ephemeral key (Solana). */
+function ghostOutput(stealthAddress: string, ephemeralPrivKeyHex: string): UnifiedOwnedOutput {
+  const ephemeralPublicKey = bytesToHex(
+    ephemeralPrivateKeyToCompressedPublicKey(hexToBytes(ephemeralPrivKeyHex)),
+  ) as Hex;
   return {
-    args: c.args,
-    transactionHash: c.transactionSignature,
-    logIndex: c.logIndex,
-    blockNumber: BigInt(c.slot),
+    stealthAddress: stealthAddress as `0x${string}`,
+    transactionHash: "0x" as Hex,
+    blockNumber: 0,
+    logIndex: 0,
+    viewTag: 0,
+    ephemeralPublicKey,
+    chain: "solana",
+    chainId: 1,
+    source: "native",
   };
-}
-
-type LogWithArgs = { args?: { stealthAddress?: string; ephemeralPubKey?: string; metadata?: string }; transactionHash?: string | null; logIndex?: number | null; blockNumber?: bigint | null };
-type LogRow = {
-  id: string;
-  stealthAddress: string;
-  ephemeralPubKeyHex: string | undefined;
-  viewTag: number;
-  blockNumber: number;
-  txHash: string;
-};
-
-async function processRawLogsToFoundTxs(
-  connection: Connection,
-  rawLogs: LogWithArgs[],
-  wasm: OpaqueWasmModule | null,
-  getMasterKeys: (() => MasterKeys) | null,
-  _cluster: SolanaCluster,
-): Promise<FoundTx[]> {
-  const rows: LogRow[] = rawLogs.map((log, i) => {
-    const args = log.args;
-    return {
-      id: `${log.transactionHash ?? ""}-${log.logIndex ?? i}`,
-      stealthAddress: args?.stealthAddress ?? "",
-      ephemeralPubKeyHex: typeof args?.ephemeralPubKey === "string" ? args.ephemeralPubKey : undefined,
-      viewTag: viewTagFromMetadata(typeof args?.metadata === "string" ? args.metadata : undefined),
-      blockNumber: Number(log.blockNumber ?? 0),
-      txHash: log.transactionHash ?? "",
-    };
-  });
-
-  if (!wasm || !getMasterKeys) {
-    return [];
-  }
-  let masterKeys: MasterKeys;
-  try {
-    masterKeys = getMasterKeys();
-  } catch {
-    return [];
-  }
-
-  const { viewPrivKey, spendPubKey } = masterKeys;
-  const matched: LogRow[] = [];
-
-  for (const row of rows) {
-    try {
-      if (!row.stealthAddress || !row.ephemeralPubKeyHex) continue;
-      const ephemeralPubKey = toHexBytes(row.ephemeralPubKeyHex);
-      if (ephemeralPubKey.length !== 33) continue;
-
-      const viewTagResult = wasm.check_announcement_view_tag_wasm(
-        row.viewTag,
-        viewPrivKey,
-        ephemeralPubKey
-      );
-      if (viewTagResult === "NoMatch") continue;
-
-      let isOurs: boolean;
-      try {
-        isOurs = wasm.check_announcement_wasm(
-          row.stealthAddress,
-          row.viewTag,
-          viewPrivKey,
-          spendPubKey,
-          ephemeralPubKey
-        );
-      } catch {
-        isOurs = false;
-      }
-      if (!isOurs) continue;
-
-      console.log("🎯 [Opaque] Match found for address:", row.stealthAddress);
-      matched.push(row);
-    } catch (err) {
-      console.warn("🔑 [Opaque] Skipping malformed log:", row.id, err);
-    }
-  }
-
-  const foundWithAddresses = matched.map((row) => {
-    let privateKey: string | undefined;
-    let stealthSolanaAddress: string | undefined;
-    if (wasm && masterKeys && row.ephemeralPubKeyHex) {
-      try {
-        const ephemeralPubKey = toHexBytes(row.ephemeralPubKeyHex);
-        if (ephemeralPubKey.length === 33) {
-          const stealthPrivKeyBytes = wasm.reconstruct_signing_key_wasm(
-            masterKeys.spendPrivKey,
-            masterKeys.viewPrivKey,
-            ephemeralPubKey
-          );
-          privateKey =
-            "0x" +
-            Array.from(stealthPrivKeyBytes)
-              .map((b) => b.toString(16).padStart(2, "0"))
-              .join("");
-          stealthSolanaAddress = deriveStealthSolanaAddressFromStealthPrivKey(stealthPrivKeyBytes);
-        }
-      } catch (err) {
-        console.warn("🔑 [Opaque] Key reconstruction failed for", row.stealthAddress, err);
-      }
-    }
-    return { row, privateKey, stealthSolanaAddress };
-  });
-
-  const balances = await Promise.all(
-    foundWithAddresses.map(async ({ stealthSolanaAddress }) => {
-      if (!stealthSolanaAddress) return 0n;
-      try {
-        return BigInt(await connection.getBalance(new PublicKey(stealthSolanaAddress)));
-      } catch {
-        return 0n;
-      }
-    }),
-  );
-
-  const found: FoundTx[] = foundWithAddresses.map(({ row, privateKey, stealthSolanaAddress }, i) => {
-    const balance = balances[i] ?? 0n;
-    return {
-      id: row.id,
-      address: row.stealthAddress,
-      stealthSolanaAddress,
-      balance,
-      privateKey,
-      txHash: row.txHash,
-      blockNumber: row.blockNumber,
-      isSpent: false,
-      source: "announcement",
-    };
-  });
-
-  const totalBalance = found.reduce((sum, tx) => sum + tx.balance, 0n);
-  console.log("📥 [Opaque] PrivateBalance: fetchFoundTxs done", {
-    count: found.length,
-    totalBalanceLamports: totalBalance.toString(),
-    totalBalanceSol: formatSol(totalBalance),
-  });
-
-  return found;
-}
-
-function scanForAttestations(
-  wasm: OpaqueWasmModule,
-  getMasterKeys: (() => MasterKeys) | null,
-  announcements: CachedAnnouncement[],
-  addDiscoveredTrait: (trait: DiscoveredTrait) => void
-) {
-  if (!getMasterKeys || announcements.length === 0) return;
-
-  let masterKeys: MasterKeys;
-  try {
-    masterKeys = getMasterKeys();
-  } catch {
-    return;
-  }
-
-  const jsonPayload = JSON.stringify(
-    announcements.map((a) => ({
-      stealthAddress: a.args?.stealthAddress ?? "",
-      viewTag: parseInt((a.args?.metadata ?? "0x00").slice(2, 4), 16),
-      ephemeralPubKey: a.args?.ephemeralPubKey ?? "0x",
-      metadata: a.args?.metadata ?? "0x",
-      txHash: a.transactionSignature,
-      blockNumber: a.slot,
-    }))
-  );
-
-  try {
-    const resultJson = wasm.scan_attestations_wasm(
-      jsonPayload,
-      masterKeys.viewPrivKey,
-      masterKeys.spendPubKey
-    );
-    const parsed = StealthAttestationArraySchema.safeParse(JSON.parse(resultJson));
-    if (!parsed.success) {
-      console.warn("📥 [Opaque] Attestation scan: validation failed", parsed.error);
-      return;
-    }
-
-    for (const att of parsed.data) {
-      const traitDef =
-        getTraitByAttestationId(att.attestation_id) ??
-        {
-          id: `custom-${att.attestation_id}`,
-          attestationId: att.attestation_id,
-          label: `Trait #${att.attestation_id}`,
-          description: "Custom attestation",
-          icon: "layers",
-          category: "custom" as const,
-        };
-
-      addDiscoveredTrait({
-        traitDef,
-        attestationId: att.attestation_id,
-        stealthAddress: att.stealth_address,
-        txHash: att.tx_hash,
-        blockNumber: att.block_number,
-        discoveredAt: Date.now(),
-        ephemeralPubkey: att.ephemeral_pubkey,
-      });
-    }
-
-    if (parsed.data.length > 0) {
-      console.log(`📥 [Opaque] Discovered ${parsed.data.length} attestation trait(s)`);
-    }
-  } catch (err) {
-    console.warn("📥 [Opaque] Attestation scan error (non-fatal):", err);
-  }
 }
 
 export type PortfolioEntry = { tx: FoundTx; balanceRaw: bigint };
 
 export function PrivateBalanceView() {
+  const { client, isSetup } = useOpaqueSession();
+  const { address: mainWalletAddress } = useWallet();
+  const cluster = getCluster();
+  const { push: logPush } = useProtocolLog();
+  const pushTx = useTxHistoryStore((s) => s.push);
+  const { showToast } = useToast();
+
   const [found, setFound] = useState<FoundTx[]>([]);
+  const [ghostTxs, setGhostTxs] = useState<FoundTx[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [claimingId, setClaimingId] = useState<string | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [withdrawalSteps, setWithdrawalSteps] = useState<ProtocolStep[]>([]);
   const [destinationByTxId, setDestinationByTxId] = useState<Record<string, string>>({});
-  const [newlyDetectedIds, setNewlyDetectedIds] = useState<string[]>([]);
   const [claimModalTx, setClaimModalTx] = useState<FoundTx | null>(null);
-  const [ghostTxs, setGhostTxs] = useState<FoundTx[]>([]);
-  const [syncingPaused, setSyncingPaused] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const { wasm, isReady: wasmReady } = useOpaqueWasm();
-  const keysContext = useKeys();
-  const { address: mainWalletAddress } = useWallet();
-  const cluster = getCluster();
-  const currentConfig = getConfigForCluster(cluster);
-  const { push: logPush } = useProtocolLog();
-  const pushTx = useTxHistoryStore((s) => s.push);
-  const ghostStoreEntries = useGhostAddressStore((s) => s.entries);
-  const ghostAnnouncementKeys = useGhostAnnouncementStore((s) => s.keys);
-  const ghostEntries = useMemo(
-    () =>
-      ghostStoreEntries.filter(
-        (e) => e.cluster === cluster && !!e.ephemeralPrivKeyHex
-      ),
-    [ghostStoreEntries, cluster]
-  );
-  const watchlistAdd = useWatchlistStore((s) => s.add);
-  const watchlistArchive = useWatchlistStore((s) => s.archive);
-  const { showToast } = useToast();
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const [manualImportAddress, setManualImportAddress] = useState("");
   const [manualImportError, setManualImportError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [ghostAnnounceTarget, setGhostAnnounceTarget] = useState<{
-    stealthAddress: `0x${string}`;
-    ephemeralPrivKeyHex: `0x${string}`;
-  } | null>(null);
 
-  const publicClient = useMemo(() => new Connection(getRpcUrl(), "confirmed"), []);
-
-  const ghostAddresses = useMemo(
-    () => ghostEntries.map((g) => g.stealthAddress as `0x${string}`),
-    [ghostEntries]
-  );
+  const ghostStoreEntries = useGhostAddressStore((s) => s.entries);
+  const watchlistAdd = useWatchlistStore((s) => s.add);
+  const watchlistArchive = useWatchlistStore((s) => s.archive);
   const watchlistAddresses = useWatchlist(cluster);
 
-  useEffect(() => {
-    if (cluster == null) return;
-    const add = useWatchlistStore.getState().add;
-    ghostEntries.forEach((g) => add(cluster, g.stealthAddress));
-  }, [cluster, ghostEntries]);
-
-  const scanner = useScanner({
-    cluster,
-    publicClient,
-    announcerAddress: currentConfig?.announcerProgram.toBase58() ?? null,
-    enabled: Boolean(wasmReady && cluster && currentConfig),
-    ghostAddresses,
-    watchlistAddresses: watchlistAddresses.length > 0 ? watchlistAddresses : undefined,
-  });
-
+  const publicClient = useMemo(() => new Connection(getRpcUrl(), "confirmed"), []);
   const nativeAsset: TokenInfo = getNativeToken();
+
+  const ghostEntries = useMemo(
+    () => ghostStoreEntries.filter((e) => e.cluster === cluster && !!e.ephemeralPrivKeyHex),
+    [ghostStoreEntries, cluster],
+  );
+
+  // Discover announced owned outputs via the SDK (fetch + WASM match + balance, one path).
+  useEffect(() => {
+    if (!client || cluster == null) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const outputs = await client.scan({ chains: ["solana"], includeCrossChain: false });
+        const balances = await client.getBalancesForOutputs(outputs);
+        if (cancelled) return;
+        const txs: FoundTx[] = outputs.map((o, i) => ({
+          id: `${o.transactionHash}-${o.logIndex}`,
+          address: o.stealthAddress,
+          solanaAddress: balances[i]?.address,
+          balance: balances[i]?.nativeRaw ?? 0n,
+          ephemeralPublicKey: o.ephemeralPublicKey,
+          txHash: o.transactionHash,
+          blockNumber: o.blockNumber,
+          source: "announcement",
+        }));
+        setFound(txs);
+        logPush("wasm", `Matched ${txs.length} owned announcement(s)`);
+      } catch (err) {
+        if (!cancelled) console.warn("[Opaque] scan error", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, cluster, refreshKey, logPush]);
+
+  // Manual ghost balances (not announced): derive the Solana account + balance from stored keys.
+  useEffect(() => {
+    if (!client || cluster == null) {
+      setGhostTxs([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const outputs = ghostEntries.map((g) =>
+          ghostOutput(g.stealthAddress, g.ephemeralPrivKeyHex as string),
+        );
+        const keyed = await client.getBalancesForOutputs(outputs);
+        // View-only watchlist addresses (no stored key): direct balance read.
+        const viewOnly = watchlistAddresses.filter(
+          (a) => !ghostEntries.some((g) => g.stealthAddress.toLowerCase() === a.toLowerCase()),
+        );
+        const viewBalances = await Promise.all(
+          viewOnly.map(async (addr) => {
+            try {
+              return BigInt(await publicClient.getBalance(new PublicKey(addr)));
+            } catch {
+              return 0n;
+            }
+          }),
+        );
+        if (cancelled) return;
+        const ghostFound: FoundTx[] = [];
+        ghostEntries.forEach((g, i) => {
+          const balance = keyed[i]?.nativeRaw ?? 0n;
+          if (balance > 0n) {
+            ghostFound.push({
+              id: `ghost-${g.stealthAddress}`,
+              address: g.stealthAddress,
+              solanaAddress: keyed[i]?.address,
+              balance,
+              ephemeralPublicKey: outputs[i].ephemeralPublicKey,
+              txHash: "",
+              blockNumber: 0,
+              source: "manual",
+            });
+          }
+        });
+        viewOnly.forEach((addr, i) => {
+          const balance = viewBalances[i] ?? 0n;
+          if (balance > 0n) {
+            ghostFound.push({
+              id: `watch-${addr}`,
+              address: addr,
+              balance,
+              txHash: "",
+              blockNumber: 0,
+              source: "watch",
+            });
+          }
+        });
+        setGhostTxs(ghostFound);
+      } catch (err) {
+        if (!cancelled) console.warn("[Opaque] ghost balance error", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, cluster, ghostEntries, watchlistAddresses, publicClient, refreshKey]);
 
   const portfolio = useMemo(() => {
     const activeTxs = [...found.filter((tx) => !tx.isSpent), ...ghostTxs];
     let totalRaw = 0n;
     const entries: PortfolioEntry[] = [];
     for (const tx of activeTxs) {
-      const balanceRaw = tx.balance;
-      if (balanceRaw > 0n) {
-        totalRaw += balanceRaw;
-        entries.push({ tx, balanceRaw });
+      if (tx.balance > 0n) {
+        totalRaw += tx.balance;
+        entries.push({ tx, balanceRaw: tx.balance });
       }
     }
     return { asset: nativeAsset, totalRaw, entries };
@@ -364,257 +221,86 @@ export function PrivateBalanceView() {
     setDestinationByTxId((prev) => ({ ...prev, [txId]: value }));
   }, []);
 
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    setRefreshKey((k) => k + 1);
+    // The effects re-run on refreshKey; clear the flag shortly after.
+    setTimeout(() => setRefreshing(false), 800);
+  }, []);
+
   const handleClaim = useCallback(
     async (tx: FoundTx, destination: string) => {
       const trimmed = destination.trim();
-      const isGhost = tx.id.startsWith("ghost-");
-      if (!isGhost && !tx.privateKey) return;
-      if (isGhost && (!keysContext.isSetup || !wasm)) {
-        setClaimError("Keys or WASM not ready for ghost withdrawal.");
+      if (!client) {
+        setClaimError("Session not ready.");
         return;
       }
-      if (cluster == null) {
-        setClaimError("Unsupported network.");
+      if (tx.source === "watch" || !tx.ephemeralPublicKey) {
+        setClaimError("This address has no stored key and cannot be withdrawn.");
         return;
       }
-      const amountRaw = tx.balance;
-      if (amountRaw <= 0n) return;
-      if (!trimmed) {
-        setClaimError("Please enter a destination address.");
+      if (tx.balance <= 0n) return;
+      if (!trimmed || !isAddress(trimmed)) {
+        setClaimError("Enter a valid destination address.");
         return;
       }
-      if (!isAddress(trimmed)) {
-        setClaimError("Invalid destination address.");
-        return;
-      }
-      const withdrawConnection = new Connection(getRpcUrl(), "confirmed");
 
       setClaimingId(tx.id);
       setClaimError(null);
-      setWithdrawalSteps([]);
+      setWithdrawalSteps([
+        { id: "wd-1", status: "wait", label: "Reconstructing key + sweeping…" },
+      ]);
       logPush("wasm", "Reconstructing stealth key and signing claim tx…");
-      const amountStr = formatSol(amountRaw);
-      logPush("blockchain", `Claim: ${amountStr} SOL → ${trimmed.slice(0, 10)}…`);
-      let step3Label = `[Step 3] Sweeping to Destination`;
-      const onStatus = (s: { tag: string; label: string; detail?: string }) => {
-        if (s.detail?.includes("Sending ")) {
-          const m = s.detail.match(/Sending ([\d.]+)/);
-          if (m) step3Label = `[Step 3] Sweeping ${m[1]} SOL to Destination`;
-        }
-        setWithdrawalSteps((prev) => {
-          const steps: ProtocolStep[] =
-            prev.length >= 3
-              ? [...prev]
-              : [
-                  { id: "wd-1", status: "wait", label: "[Step 1] Reconstructing key…" },
-                  { id: "wd-2", status: "wait", label: "[Step 2] Estimating fees…" },
-                  { id: "wd-3", status: "wait", label: "[Step 3] Sweeping … to Destination" },
-                ];
-          if (s.label.includes("Reconstructing")) steps[0] = { ...steps[0], status: "ok" };
-          if (s.label.includes("Estimating") || s.label.includes("fee")) {
-            steps[0] = { ...steps[0], status: "ok" };
-            steps[1] = { ...steps[1], status: "ok" };
-          }
-          if (s.tag === "SIGN" || s.tag === "SEND") {
-            steps[0] = { ...steps[0], status: "ok" };
-            steps[1] = { ...steps[1], status: "ok" };
-            steps[2] = { ...steps[2], label: step3Label };
-          }
-          if (s.tag === "DONE") {
-            steps[0] = { ...steps[0], status: "ok" };
-            steps[1] = { ...steps[1], status: "ok" };
-            steps[2] = { ...steps[2], status: "done", label: step3Label };
-          }
-          return steps;
-        });
-      };
-      let withdrawalHash: string | undefined;
+      logPush("blockchain", `Claim: ${formatSol(tx.balance)} SOL → ${shortenAddress(trimmed)}`);
+
       try {
-        if (isGhost) {
-          withdrawalHash = await withdrawFromGhostAddress(
-            tx.address as `0x${string}`,
-            cluster,
-            trimmed,
-            { type: "native" },
-            withdrawConnection,
-            keysContext.getMasterKeys!,
-            wasm!,
-            onStatus,
-          );
-        } else {
-          withdrawalHash = await executeStealthWithdrawal(
-            tx.privateKey as `0x${string}`,
-            trimmed,
-            withdrawConnection,
-            onStatus
-          );
-        }
-        const amountFormatted = formatSol(amountRaw);
+        const { tx: sig } = await client.sweep({
+          output: { ephemeralPublicKey: tx.ephemeralPublicKey as Hex },
+          chain: "solana",
+          destination: trimmed,
+        });
+        setWithdrawalSteps([{ id: "wd-1", status: "done", label: "Swept to destination." }]);
         pushTx({
           cluster,
-          kind: isGhost ? "ghost" : "received",
-          counterparty: isGhost ? "Manual Ghost" : tx.address.slice(0, 10) + "…",
-          amountLamports: amountRaw.toString(),
+          kind: tx.source === "manual" ? "ghost" : "received",
+          counterparty: tx.source === "manual" ? "Manual Ghost" : shortenAddress(tx.address, 10, 0),
+          amountLamports: tx.balance.toString(),
           tokenSymbol: "SOL",
           tokenAddress: null,
-          amount: amountFormatted,
-          txHash: withdrawalHash,
+          amount: formatSol(tx.balance),
+          txHash: sig,
           stealthAddress: tx.address,
         });
-        if (withdrawalHash && cluster != null) {
-          showToast("Withdrawal successful", { explorerTx: { cluster, txSig: withdrawalHash } });
+        if (cluster != null) {
+          showToast("Withdrawal successful", { explorerTx: { cluster, txSig: sig } });
         }
-        if (isGhost) {
+        if (tx.source === "manual") {
           setGhostTxs((prev) => prev.filter((t) => t.id !== tx.id));
         } else {
-          setFound((prev) =>
-            prev.map((t) => (t.id === tx.id ? { ...t, isSpent: true } : t))
-          );
+          setFound((prev) => prev.map((t) => (t.id === tx.id ? { ...t, isSpent: true } : t)));
         }
         setClaimModalTx((prev) => (prev?.id === tx.id ? null : prev));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setClaimError(msg);
-        setWithdrawalSteps((prev) => {
-          if (prev.length === 0) return prev;
-          const last = prev[prev.length - 1];
-          return prev.slice(0, -1).concat([{ ...last, status: "error" as const, detail: msg }]);
-        });
+        setWithdrawalSteps([{ id: "wd-1", status: "error", label: "Sweep failed", detail: msg }]);
       } finally {
         setClaimingId(null);
       }
     },
-    [cluster, pushTx, showToast, keysContext.isSetup, keysContext.getMasterKeys, wasm]
+    [client, cluster, pushTx, showToast, logPush],
   );
-
-  const handleRetrySync = useCallback(async () => {
-    if (cluster == null) return;
-    useVaultStore.getState().setLastSyncedBlock(null);
-    setSyncingPaused(false);
-    setSyncError(null);
-    await scanner.retrySync();
-  }, [cluster, scanner]);
-
-  const handleRefreshBalances = useCallback(async () => {
-    setSyncingPaused(false);
-    setSyncError(null);
-    setRefreshing(true);
-    try {
-      await scanner.refresh();
-    } finally {
-      setRefreshing(false);
-    }
-  }, [scanner]);
-
-  useEffect(() => {
-    if (!wasmReady || wasm === null || cluster == null || !publicClient) {
-      if (cluster == null) setLoading(false);
-      return;
-    }
-    if (scanner.announcements.length === 0) {
-      if (scanner.progress.phase === "done") {
-        setFound([]);
-        setLoading(false);
-      }
-      return;
-    }
-
-    setLoading(true);
-    const getMasterKeys = keysContext.isSetup ? keysContext.getMasterKeys : null;
-    const addDiscoveredTrait = useReputationStore.getState().addDiscoveredTrait;
-    const runMatch = () => {
-      const rawLogs = scanner.announcements.map(cachedToLogWithArgs);
-      processRawLogsToFoundTxs(publicClient, rawLogs, wasm, getMasterKeys, cluster)
-        .then((txs) => {
-          setFound((prev) => {
-            const prevIds = new Set(prev.map((t) => t.id));
-            const newIds = txs.filter((t) => !prevIds.has(t.id)).map((t) => t.id);
-            if (newIds.length > 0) setNewlyDetectedIds((old) => [...old, ...newIds]);
-            return txs;
-          });
-          logPush("wasm", `Matched ${txs.length} owned announcement(s) from cache`);
-
-          scanForAttestations(wasm, getMasterKeys, scanner.announcements, addDiscoveredTrait);
-        })
-        .catch((err) => console.warn("📥 [Opaque] Match error", err))
-        .finally(() => {
-          setLoading(false);
-          scanner.markSyncComplete();
-        });
-    };
-
-    if (typeof requestIdleCallback !== "undefined") {
-      requestIdleCallback(runMatch, { timeout: 500 });
-    } else {
-      setTimeout(runMatch, 0);
-    }
-  }, [scanner.announcements, scanner.progress.phase, wasmReady, wasm, cluster, publicClient, keysContext.isSetup]);
-
-  useEffect(() => {
-    if (scanner.progress.phase === "error" && scanner.progress.error) {
-      setSyncingPaused(true);
-      setSyncError(scanner.progress.error);
-    }
-  }, [scanner.progress.phase, scanner.progress.error]);
-
-  useEffect(() => {
-    if (cluster == null || !wasm) return;
-    const { ghostBalances } = scanner;
-    const addressesWithBalance = Object.keys(ghostBalances).filter((key) => {
-      return (ghostBalances[key] ?? 0n) > 0n;
-    });
-    if (addressesWithBalance.length === 0) {
-      setGhostTxs([]);
-      return;
-    }
-    const getMasterKeys = keysContext.isSetup ? keysContext.getMasterKeys : null;
-    const ghostFound: FoundTx[] = [];
-    for (const key of addressesWithBalance) {
-      const addr = key as `0x${string}`;
-      const balance = ghostBalances[key] ?? 0n;
-      const g = ghostEntries.find((e) => e.stealthAddress.toLowerCase() === key);
-      let privateKey: string | undefined;
-      if (g?.ephemeralPrivKeyHex && getMasterKeys && wasm) {
-        try {
-          const masterKeys = getMasterKeys();
-          const ephemeralPubKey = secp256k1.getPublicKey(toHexBytes(g.ephemeralPrivKeyHex), true);
-          const stealthPrivKeyBytes = wasm.reconstruct_signing_key_wasm(
-            masterKeys.spendPrivKey,
-            masterKeys.viewPrivKey,
-            ephemeralPubKey
-          );
-          privateKey =
-            "0x" +
-            Array.from(stealthPrivKeyBytes)
-              .map((b) => b.toString(16).padStart(2, "0"))
-              .join("");
-        } catch {
-          /* omit key if reconstruction fails */
-        }
-      }
-      const ghostTx: FoundTx = {
-        id: `ghost-${addr}`,
-        address: addr,
-        balance,
-        privateKey,
-        txHash: "",
-        blockNumber: 0,
-        isSpent: false,
-        source: "manual",
-      };
-      ghostFound.push(ghostTx);
-    }
-    setGhostTxs(ghostFound);
-  }, [cluster, wasm, keysContext.isSetup, ghostEntries, scanner.ghostBalances]);
-
-  useEffect(() => {
-    if (newlyDetectedIds.length === 0) return;
-    const t = setTimeout(() => setNewlyDetectedIds([]), 2200);
-    return () => clearTimeout(t);
-  }, [newlyDetectedIds]);
 
   const allEntries = portfolio.entries;
   const totalSol = portfolio.totalRaw;
+
+  if (!isSetup) {
+    return (
+      <div className="card max-w-lg mx-auto text-center text-neutral-500">
+        Complete key setup first.
+      </div>
+    );
+  }
 
   return (
     <div className="w-full flex flex-col">
@@ -629,11 +315,11 @@ export function PrivateBalanceView() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleRefreshBalances}
-              disabled={refreshing || scanner.progress.phase === "syncing" || scanner.progress.phase === "backfilling" || scanner.progress.phase === "indexer-fetch"}
+              onClick={handleRefresh}
+              disabled={refreshing || loading}
               className="rounded-xl border border-ink-600 bg-ink-950/30 px-3.5 py-2 text-sm font-medium text-mist transition-colors hover:border-sol-purple/30 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {refreshing ? "Refreshing…" : "Refresh"}
+              {refreshing || loading ? "Scanning…" : "Refresh"}
             </button>
             <button
               type="button"
@@ -648,173 +334,42 @@ export function PrivateBalanceView() {
             </button>
           </div>
         </div>
-
-        {/* Scanning status */}
-        <div
-          className={`mt-5 p-4 rounded-2xl bg-ink-900/35 border border-ink-700/60 ${
-            scanner.progress.phase === "syncing" ||
-            scanner.progress.phase === "backfilling" ||
-            scanner.progress.phase === "indexer-fetch"
-              ? "scanner-pulse"
-              : ""
-          } ${syncingPaused ? "border-amber-500/40" : ""}`}
-        >
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-sm text-mist font-mono">
-              {syncingPaused
-                ? "Syncing Paused"
-                : scanner.progress.phase === "indexer-fetch"
-                  ? "Syncing with Indexer…"
-                  : scanner.progress.phase === "indexer-fetched"
-                    ? "Scanning Vault…"
-                    : scanner.progress.phase === "backfilling"
-                      ? "Optimizing Vault…"
-                      : scanner.progress.phase === "syncing" || scanner.progress.phase === "loading-cache"
-                        ? "Scanning"
-                        : scanner.progress.phase === "done"
-                          ? "Idle"
-                          : scanner.progress.phase === "error"
-                            ? "Error"
-                            : "Idle"}
-            </span>
-            <span className="text-slate-200 text-sm font-mono">
-              {scanner.progress.currentBlock > 0n
-                ? `Slot ${Number(scanner.progress.currentBlock).toLocaleString()}`
-                : scanner.progress.phase === "syncing" || scanner.progress.phase === "backfilling"
-                  ? "…"
-                  : "—"}
-            </span>
-          </div>
-          <div className="h-1 rounded-full bg-ink-800 overflow-hidden">
-            <div
-              className="h-full bg-sol-purple/40 rounded-full transition-all duration-500"
-              style={{ width: `${scanner.progress.percent}%` }}
-            />
-          </div>
-          {(scanner.progress.message || scanner.isBackfilling) && !syncingPaused && (
-            <p className="text-mist/70 text-xs mt-2 font-mono">
-              {scanner.progress.phase === "indexer-fetched"
-                ? "Scanning Vault…"
-                : scanner.isBackfilling
-                  ? `Optimizing Vault… [${scanner.progress.percent}%]`
-                  : scanner.progress.message}
-            </p>
-          )}
-          {syncingPaused && (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <p className="text-amber-500/90 text-xs font-mono flex-1 min-w-0 truncate" title={syncError ?? undefined}>
-                {syncError ?? "RPC error"}
-              </p>
-              <button
-                type="button"
-                onClick={handleRetrySync}
-                className="px-2 py-1 text-xs font-medium rounded-lg bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 border border-amber-500/40"
-              >
-                Retry Sync
-              </button>
-            </div>
-          )}
-        </div>
       </div>
 
-      {claimError && (
+      {claimError && !claimModalTx && (
         <div className="mb-4 p-3 rounded-xl bg-error/10 border border-error/30 text-error text-sm">
           {claimError}
         </div>
       )}
 
-      {!wasmReady ? (
-        <div className="rounded-2xl border border-ink-700 bg-ink-900/25 p-6">
-          <p className="text-mist text-sm">Initializing cryptography…</p>
-        </div>
-      ) : loading ? (
+      {loading ? (
         <div className="rounded-2xl border border-ink-700 bg-ink-900/25 p-6">
           <p className="text-mist text-sm">Deciphering payments…</p>
         </div>
       ) : totalSol === 0n && allEntries.length === 0 ? (
         <div className="rounded-2xl border border-ink-700 bg-ink-900/25 p-6">
-          <p className="text-mist text-sm">
-            No incoming payments found yet.
-          </p>
+          <p className="text-mist text-sm">No incoming payments found yet.</p>
           <p className="text-mist/70 text-xs mt-1">
             Payments sent to your stealth address will appear here.
           </p>
         </div>
       ) : (
         <div className="space-y-4">
-          {/* Total balance */}
           <div className="rounded-2xl border border-ink-700 bg-ink-900/30 p-6">
             <p className="text-mist text-sm">Total SOL</p>
-            <p className="font-display text-2xl font-bold text-white mt-1">
-              {formatSol(totalSol)}
-            </p>
+            <p className="font-display text-2xl font-bold text-white mt-1">{formatSol(totalSol)}</p>
             <p className="text-mist/70 text-xs mt-1">
               {allEntries.length} address{allEntries.length !== 1 ? "es" : ""}
             </p>
           </div>
 
-          {/* List of stealth addresses */}
-          <h3 className="font-display text-xl font-bold text-white">
-            SOL — Stealth addresses
-          </h3>
+          <h3 className="font-display text-xl font-bold text-white">SOL — Stealth addresses</h3>
           <div className="space-y-3">
             {allEntries
               .filter((e) => e.balanceRaw > 0n)
               .map(({ tx, balanceRaw }) => {
                 const amountStr = formatSol(balanceRaw);
-                const ghostEntry = ghostEntries.find((e) => e.stealthAddress.toLowerCase() === tx.address.toLowerCase());
-                const ghostEntryAny = ghostStoreEntries.find(
-                  (e) => e.cluster === cluster && e.stealthAddress.toLowerCase() === tx.address.toLowerCase()
-                );
-                const canReconstructKey = !!(ghostEntry?.ephemeralPrivKeyHex && ghostEntry?.stealthAddress);
-                const announcerConfigured = !!currentConfig?.announcerProgram;
-                const ghostAnnouncedOnChain =
-                  cluster != null && !!ghostAnnouncementKeys[ghostAnnouncementEntryKey(cluster, tx.address)];
-                const canAnnounceGhostOnchain =
-                  tx.source === "manual" &&
-                  cluster != null &&
-                  announcerConfigured &&
-                  !!ghostEntryAny?.ephemeralPrivKeyHex &&
-                  !!keysContext.stealthMetaAddressHex &&
-                  !!wasm &&
-                  !!publicClient &&
-                  !ghostAnnouncedOnChain;
-                const isGhostWithoutKey = tx.source === "manual" && !tx.privateKey && !canReconstructKey;
-                if (isGhostWithoutKey) {
-                  return (
-                    <div
-                      key={tx.id}
-                      className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-5 flex flex-wrap items-center justify-between gap-3"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/40">
-                            Manual/Ghost Funds
-                          </span>
-                          <ExplorerLink cluster={cluster} value={tx.address} type="address" className="text-mist text-xs" />
-                        </div>
-                        <p className="text-success font-semibold mt-0.5">
-                          {amountStr} SOL
-                        </p>
-                        <p className="text-amber-500/90 text-xs mt-1">
-                          This address was generated incorrectly and cannot be spent.
-                        </p>
-                      </div>
-                      {cluster != null && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            watchlistArchive(cluster, tx.address);
-                            showToast("Address archived. It will no longer be polled for balances.");
-                          }}
-                          className="px-2 py-1 text-xs rounded-lg border border-ink-600 text-mist hover:border-sol-purple/30 hover:text-white transition-colors"
-                        >
-                          Archive
-                        </button>
-                      )}
-                    </div>
-                  );
-                }
+                const canWithdraw = tx.source !== "watch" && !!tx.ephemeralPublicKey;
                 return (
                   <div
                     key={tx.id}
@@ -822,22 +377,32 @@ export function PrivateBalanceView() {
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        {tx.source === "manual" && (
+                        {tx.source !== "announcement" && (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/40">
-                            Manual/Ghost Funds
+                            {tx.source === "manual" ? "Manual/Ghost Funds" : "Watch-only"}
                           </span>
                         )}
-                        <ExplorerLink cluster={cluster} value={tx.address} type="address" className="text-mist text-xs" />
+                        <ExplorerLink
+                          cluster={cluster}
+                          value={tx.solanaAddress ?? tx.address}
+                          type="address"
+                          className="text-mist text-xs"
+                        />
                         {tx.txHash && (
-                          <ExplorerLink cluster={cluster} value={tx.txHash} type="tx" className="text-mist/70 text-xs" startChars={8} endChars={6} />
+                          <ExplorerLink
+                            cluster={cluster}
+                            value={tx.txHash}
+                            type="tx"
+                            className="text-mist/70 text-xs"
+                            startChars={8}
+                            endChars={6}
+                          />
                         )}
                       </div>
-                      <p className="text-success font-semibold mt-0.5">
-                        {amountStr} SOL
-                      </p>
+                      <p className="text-success font-semibold mt-0.5">{amountStr} SOL</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      {tx.source === "manual" && cluster != null && (
+                      {tx.source !== "announcement" && cluster != null && (
                         <button
                           type="button"
                           onClick={() => {
@@ -849,85 +414,43 @@ export function PrivateBalanceView() {
                           Archive
                         </button>
                       )}
-                      {canAnnounceGhostOnchain && ghostEntryAny?.ephemeralPrivKeyHex && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setGhostAnnounceTarget({
-                              stealthAddress: tx.address as `0x${string}`,
-                              ephemeralPrivKeyHex: ghostEntryAny.ephemeralPrivKeyHex as `0x${string}`,
-                            })
-                          }
-                          className="px-2 py-1 text-xs rounded-md border border-cyan-500/50 text-cyan-300 hover:bg-cyan-500/10"
-                        >
-                          Announce on-chain
-                        </button>
-                      )}
-                    <button
-                      type="button"
-                      disabled={
-                        !(destinationByTxId[tx.id] ?? "").trim() ||
-                        !isAddress((destinationByTxId[tx.id] ?? "").trim()) ||
-                        claimingId !== null
-                      }
-                      onClick={() => {
-                        setClaimModalTx(tx);
-                      }}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-sol-gradient text-white disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:opacity-90"
-                    >
-                      {claimingId === tx.id ? "Withdrawing…" : "Withdraw"}
-                    </button>
+                      <button
+                        type="button"
+                        disabled={!canWithdraw || claimingId !== null}
+                        onClick={() => setClaimModalTx(tx)}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-sol-gradient text-white disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:opacity-90"
+                      >
+                        {claimingId === tx.id ? "Withdrawing…" : canWithdraw ? "Withdraw" : "No key"}
+                      </button>
                     </div>
-                    <div className="w-full mt-2">
-                      <input
-                        type="text"
-                        value={destinationByTxId[tx.id] ?? ""}
-                        onChange={(e) => setDestination(tx.id, e.target.value)}
-                        placeholder="Destination Solana address…"
-                        className="input-field text-sm"
-                      />
-                      {mainWalletAddress && (
-                        <button
-                          type="button"
-                          onClick={() => setDestination(tx.id, mainWalletAddress)}
-                          className="mt-1.5 px-2 py-1 text-xs rounded-md btn-secondary"
-                        >
-                          Use connected wallet
-                        </button>
-                      )}
-                    </div>
+                    {canWithdraw && (
+                      <div className="w-full mt-2">
+                        <input
+                          type="text"
+                          value={destinationByTxId[tx.id] ?? ""}
+                          onChange={(e) => setDestination(tx.id, e.target.value)}
+                          placeholder="Destination Solana address…"
+                          className="input-field text-sm"
+                        />
+                        {mainWalletAddress && (
+                          <button
+                            type="button"
+                            onClick={() => setDestination(tx.id, mainWalletAddress)}
+                            className="mt-1.5 px-2 py-1 text-xs rounded-md btn-secondary"
+                          >
+                            Use connected wallet
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
-              }) ?? null}
+              })}
           </div>
         </div>
       )}
 
       {claimModalTx && (
-        (() => {
-          const entry = ghostEntries.find((e) => e.stealthAddress.toLowerCase() === claimModalTx.address.toLowerCase());
-          const hasKey = !!(entry?.ephemeralPrivKeyHex && entry?.stealthAddress);
-          const showIncorrectlyGenerated = claimModalTx.source === "manual" && !claimModalTx.privateKey && !hasKey;
-          return showIncorrectlyGenerated;
-        })() ? (
-          <ModalShell
-            open
-            title="Cannot withdraw"
-            description="This manual ghost address was generated incorrectly and cannot be spent."
-            onClose={() => { setClaimModalTx(null); setClaimError(null); }}
-            maxWidthClassName="max-w-md"
-          >
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => { setClaimModalTx(null); setClaimError(null); }}
-              className="rounded-xl border border-ink-600 bg-ink-950/30 px-4 py-2 text-sm font-medium text-mist hover:border-sol-purple/30 hover:text-white transition-colors"
-            >
-              Close
-            </button>
-            </div>
-          </ModalShell>
-        ) : (
         <ClaimModal
           tx={claimModalTx}
           asset={nativeAsset}
@@ -937,9 +460,7 @@ export function PrivateBalanceView() {
           claiming={claimingId === claimModalTx.id}
           error={claimError}
           onDestinationChange={(value: string) => setDestination(claimModalTx.id, value)}
-          onConfirm={() =>
-            handleClaim(claimModalTx, destinationByTxId[claimModalTx.id] ?? "")
-          }
+          onConfirm={() => handleClaim(claimModalTx, destinationByTxId[claimModalTx.id] ?? "")}
           onClose={() => {
             setClaimModalTx(null);
             setClaimError(null);
@@ -947,32 +468,7 @@ export function PrivateBalanceView() {
           }}
           withdrawalSteps={withdrawalSteps}
         />
-        )
       )}
-
-      {ghostAnnounceTarget &&
-        cluster != null &&
-        keysContext.stealthMetaAddressHex &&
-        wasm &&
-        publicClient &&
-        currentConfig?.announcerProgram && (
-          <GhostAnnounceModal
-            open
-            onClose={() => setGhostAnnounceTarget(null)}
-            cluster={cluster}
-            ghostStealthAddress={ghostAnnounceTarget.stealthAddress}
-            ephemeralPrivKeyHex={ghostAnnounceTarget.ephemeralPrivKeyHex}
-            stealthMetaAddressHex={keysContext.stealthMetaAddressHex}
-            publicClient={publicClient}
-            wasm={wasm}
-            getMasterKeys={keysContext.getMasterKeys}
-            announcerContract={currentConfig.announcerProgram.toBase58()}
-            onAnnounced={() => {
-              setGhostAnnounceTarget(null);
-              showToast("Announced on-chain. Removed from manual ghost tracking.");
-            }}
-          />
-        )}
 
       {manualImportOpen && (
         <ModalShell
@@ -992,9 +488,7 @@ export function PrivateBalanceView() {
             placeholder="0x… or Solana address"
             className="input-field w-full mb-2 font-mono text-sm"
           />
-          {manualImportError && (
-            <p className="text-error text-xs mb-3">{manualImportError}</p>
-          )}
+          {manualImportError && <p className="text-error text-xs mb-3">{manualImportError}</p>}
           <div className="flex gap-2 justify-end">
             <button
               type="button"
@@ -1006,44 +500,37 @@ export function PrivateBalanceView() {
             <button
               type="button"
               onClick={() => {
-                  const trimmed = manualImportAddress.trim();
-                  if (!trimmed) {
-                    setManualImportError("Enter an address.");
-                    return;
-                  }
-                  if (!isAddress(trimmed)) {
-                    setManualImportError("Invalid address.");
-                    return;
-                  }
-                  if (cluster == null) {
-                    setManualImportError("Connect to a network first.");
-                    return;
-                  }
-                  const allEntries = useGhostAddressStore.getState().entries;
-                  const storedEntry = allEntries.find(
-                    (e) => e.stealthAddress.toLowerCase() === trimmed.toLowerCase()
-                  );
-                  const existsInGhost = ghostEntries.some(
-                    (e) => e.stealthAddress.toLowerCase() === trimmed.toLowerCase()
-                  );
-                  const existsInWatchlist = watchlistAddresses.some(
-                    (a) => a.toLowerCase() === trimmed.toLowerCase()
-                  );
-                  if (existsInGhost || existsInWatchlist) {
-                    setManualImportError("Address is already in the tracking list.");
-                    return;
-                  }
-                  if (storedEntry?.ephemeralPrivKeyHex) {
-                    useGhostAddressStore.getState().add({
-                      cluster,
-                      stealthAddress: trimmed,
-                      ephemeralPrivKeyHex: storedEntry.ephemeralPrivKeyHex,
-                    });
-                  }
-                  watchlistAdd(cluster, trimmed);
-                  setManualImportOpen(false);
-                  showToast("Ghost address added. Checking for funds…");
-                }}
+                const trimmed = manualImportAddress.trim();
+                if (!trimmed || !isAddress(trimmed)) {
+                  setManualImportError("Invalid address.");
+                  return;
+                }
+                if (cluster == null) {
+                  setManualImportError("Connect to a network first.");
+                  return;
+                }
+                const stored = useGhostAddressStore
+                  .getState()
+                  .entries.find((e) => e.stealthAddress.toLowerCase() === trimmed.toLowerCase());
+                if (
+                  ghostEntries.some((e) => e.stealthAddress.toLowerCase() === trimmed.toLowerCase()) ||
+                  watchlistAddresses.some((a) => a.toLowerCase() === trimmed.toLowerCase())
+                ) {
+                  setManualImportError("Address is already in the tracking list.");
+                  return;
+                }
+                if (stored?.ephemeralPrivKeyHex) {
+                  useGhostAddressStore.getState().add({
+                    cluster,
+                    stealthAddress: trimmed,
+                    ephemeralPrivKeyHex: stored.ephemeralPrivKeyHex,
+                  });
+                }
+                watchlistAdd(cluster, trimmed);
+                setManualImportOpen(false);
+                showToast("Ghost address added. Checking for funds…");
+                setRefreshKey((k) => k + 1);
+              }}
               className="rounded-xl bg-sol-gradient px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
             >
               Add & check

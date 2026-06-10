@@ -5,16 +5,14 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Connection, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { hexToBytes, type Hex } from "../lib/stealth";
-import { formatSol } from "../lib/stealth";
+import type { Hex } from "viem";
+import { formatSol } from "../lib/format";
 import { getCluster, getRpcUrl } from "../lib/chain";
-import { resolveMetaAddress } from "../lib/registry";
-import { isEnsName, resolveEnsToAddress } from "../lib/ens";
+import { isEnsName } from "../lib/ens";
 import { getConfigForCluster } from "../contracts/contract-config";
-import { buildAnnounceInstruction, SCHEME_ID_SECP256K1 } from "../lib/contracts";
-import { computeStealthAddressAndViewTag } from "../lib/stealth";
+import { createSendOnlyClient } from "../opaque/sendOnly";
 import { getExplorerTxUrl } from "../lib/explorer";
 
 const parseLamports = (val: string) => BigInt(Math.round(parseFloat(val) * 1e9));
@@ -39,7 +37,7 @@ type ResolveStatus = "idle" | "resolving" | "found" | "not_found";
 export function PayPage() {
   const { identifier } = useParams<{ identifier: string }>();
   const navigate = useNavigate();
-  const { publicKey, connect, connecting, sendTransaction } = useWallet();
+  const { publicKey, connect, connecting, signTransaction } = useWallet();
   const cluster = getCluster();
   const config = getConfigForCluster(cluster);
   const [resolveStatus, setResolveStatus] = useState<ResolveStatus>("idle");
@@ -69,29 +67,18 @@ export function PayPage() {
 
     (async () => {
       try {
+        // Direct stealth meta-address in the URL is the supported form. (.sol/SNS name resolution
+        // is not implemented, so those resolve to not_found.)
         if (isEnsName(id)) {
-          const controller = await resolveEnsToAddress(id);
-          if (cancelled) return;
-          if (!controller) {
-            setResolveStatus("not_found");
-            return;
-          }
-          const meta = await resolveMetaAddress(controller);
-          if (cancelled) return;
-          if (!meta) {
-            setResolveStatus("not_found");
-            return;
-          }
-          setResolvedMeta(meta);
+          setResolveStatus("not_found");
+          return;
+        }
+        const with0x = id.startsWith("0x") ? id : "0x" + id;
+        if (isDirectMetaAddress(with0x)) {
+          setResolvedMeta(with0x as Hex);
           setResolveStatus("found");
         } else {
-          const with0x = id.startsWith("0x") ? id : "0x" + id;
-          if (isDirectMetaAddress(with0x)) {
-            setResolvedMeta(with0x as Hex);
-            setResolveStatus("found");
-          } else {
-            setResolveStatus("not_found");
-          }
+          setResolveStatus("not_found");
         }
       } catch {
         if (!cancelled) setResolveStatus("not_found");
@@ -164,7 +151,7 @@ export function PayPage() {
   const handleSendPrivately = async () => {
     setError(null);
     setTxHash(null);
-    if (!config || !resolvedMeta || !address || !publicKey || !sendTransaction) return;
+    if (!config || !resolvedMeta || !address || !publicKey || !signTransaction) return;
     if (inputLamports == null || inputLamports <= 0n) {
       setError("Enter a valid amount.");
       return;
@@ -172,34 +159,19 @@ export function PayPage() {
     setSending(true);
     try {
       const connection = new Connection(getRpcUrl(), "confirmed");
-      const { stealthAddress, stealthSolanaAddress, ephemeralPubKey, metadata } = computeStealthAddressAndViewTag(
-        resolvedMeta
-      );
-      const destination = new PublicKey(stealthSolanaAddress);
-
-      const tx = new Transaction();
-      tx.add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: destination,
-          lamports: inputLamports,
-        })
-      );
-      tx.add(
-        buildAnnounceInstruction(
-          publicKey,
-          SCHEME_ID_SECP256K1,
-          hexToBytes(stealthAddress),
-          ephemeralPubKey,
-          metadata
-        )
-      );
-      tx.feePayer = publicKey;
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
-      const sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, "confirmed");
-      setTxHash(sig);
+      // Send-only client: the payer has no Opaque identity; derive the recipient's one-time
+      // stealth destination, transfer, and announce in one tx.
+      const client = await createSendOnlyClient({
+        connection,
+        solanaWallet: { publicKey, signTransaction },
+      });
+      const result = await client.sendStealthPayment({
+        chain: "solana",
+        recipient: resolvedMeta,
+        amount: inputLamports,
+        announce: true,
+      });
+      setTxHash(result.txHash);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Send failed";
       setError(msg);

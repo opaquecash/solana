@@ -1,4 +1,4 @@
-import { formatSol } from "../lib/stealth";
+import { formatSol } from "../lib/format";
 import type { FoundTx } from "./PrivateBalanceView";
 import type { TokenInfo } from "../lib/tokens";
 import { ProtocolStepper } from "./ProtocolStepper";

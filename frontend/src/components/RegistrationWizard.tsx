@@ -1,27 +1,17 @@
 /**
- * Onboarding wizard when the user is not registered on the current cluster.
- * Step 1: Info -> Step 2: Generate Stealth Keys (sign) -> Step 3: Register on-chain with progress.
- * On success: "Vault Unlocked" animation, then onComplete() to transition to dashboard.
+ * Onboarding wizard shown when the user has derived keys but is not yet registered on the current
+ * cluster. Step 1: Info -> Step 2: Register on-chain (via `OpaqueClient.registerMetaAddress`) with
+ * progress. On success: "Vault Unlocked" animation, then onComplete() to transition to dashboard.
  */
 
-import { useEffect, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { Connection, Transaction } from "@solana/web3.js";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { getCluster, getRpcUrl } from "../lib/chain";
-import { useKeys } from "../context/KeysContext";
-import { buildRegisterKeysInstruction, SCHEME_ID_SECP256K1 } from "../lib/contracts";
-import { hexToBytes, SETUP_MESSAGE, type Hex } from "../lib/stealth";
-import { getConfigForCluster, isClusterSupported } from "../contracts/contract-config";
-import {
-  getRememberSignaturePreference,
-  loadSignatureSession,
-  saveSignatureSession,
-  setRememberSignaturePreference,
-} from "../lib/signatureSession";
+import { getCluster } from "../lib/chain";
+import { useOpaqueSession } from "../opaque/useOpaqueSession";
+import { isClusterSupported } from "../contracts/contract-config";
 
-type Step = "info" | "generate" | "register" | "success";
-type RegisterPhase = "idle" | "deriving" | "broadcasting" | "confirming";
+type Step = "info" | "register" | "success";
+type RegisterPhase = "idle" | "broadcasting" | "confirming";
 
 function toErrorMessage(value: unknown): string {
   if (value instanceof Error) return value.message;
@@ -34,211 +24,48 @@ function toErrorMessage(value: unknown): string {
   }
 }
 
-function extractNestedErrorLines(error: unknown): string[] {
-  const lines: string[] = [];
-  if (!error || typeof error !== "object") return lines;
-  const asRecord = error as Record<string, unknown>;
-  const candidates = [asRecord.cause, asRecord.error, asRecord.originalError];
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== "object") continue;
-    const c = candidate as Record<string, unknown>;
-    if (Array.isArray(c.logs)) {
-      lines.push(...(c.logs as unknown[]).map((entry) => toErrorMessage(entry)));
-    }
-    if (typeof c.message === "string") lines.push(c.message);
-  }
-  return lines;
-}
-
 export type RegistrationWizardProps = {
   onComplete: () => void;
 };
 
 export function RegistrationWizard({ onComplete }: RegistrationWizardProps) {
-  const { setFromSignature, stealthMetaAddressHex } = useKeys();
-  const { publicKey, signMessage, sendTransaction } = useWallet();
+  const { client } = useOpaqueSession();
   const cluster = getCluster();
-  const currentConfig = getConfigForCluster(cluster);
-  const address = publicKey?.toBase58() ?? null;
   const [step, setStep] = useState<Step>("info");
-  const [signing, setSigning] = useState(false);
   const [registerPhase, setRegisterPhase] = useState<RegisterPhase>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [, setTxSig] = useState<string | null>(null);
-  const [rememberSession, setRememberSession] = useState<boolean>(() => getRememberSignaturePreference());
-
-  useEffect(() => {
-    setRememberSignaturePreference(rememberSession);
-  }, [rememberSession]);
 
   const wrongCluster = !isClusterSupported(cluster);
 
-  const handleGenerateKeys = async () => {
-    if (!address || !signMessage) {
-      setError("No wallet found.");
+  const handleRegister = async () => {
+    if (!client) {
+      setError("Session not ready. Reconnect your wallet.");
       return;
     }
     setError(null);
-    setSigning(true);
-    try {
-      let sig = await loadSignatureSession({
-        address,
-        cluster,
-        message: SETUP_MESSAGE,
-      });
-      if (!sig) {
-        const encoded = new TextEncoder().encode(SETUP_MESSAGE);
-        const sigBytes = await signMessage(encoded);
-        const hex = `0x${Array.from(sigBytes).map(b => b.toString(16).padStart(2, "0")).join("")}` as `0x${string}`;
-        sig = hex;
-        await saveSignatureSession({
-          signatureHex: hex,
-          address,
-          cluster,
-          message: SETUP_MESSAGE,
-          remember: rememberSession,
-        });
-      }
-      setFromSignature(sig);
-      setStep("register");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Signature failed");
-    } finally {
-      setSigning(false);
-    }
-  };
-
-  const handleRegister = async () => {
-    if (!stealthMetaAddressHex || !publicKey || !currentConfig) return;
-    setError(null);
-    setTxSig(null);
-    setRegisterPhase("deriving");
-    await new Promise((r) => setTimeout(r, 400));
     setRegisterPhase("broadcasting");
     try {
-      const rpcUrl = getRpcUrl();
-      const connection = new Connection(rpcUrl, "confirmed");
-      const metaBytes = hexToBytes(stealthMetaAddressHex as Hex);
-      const ix = buildRegisterKeysInstruction(
-        publicKey,
-        SCHEME_ID_SECP256K1,
-        metaBytes,
-      );
-      const tx = new Transaction().add(ix);
-      tx.feePayer = publicKey;
-      const latestBlockhash = await connection.getLatestBlockhash("confirmed");
-      tx.recentBlockhash = latestBlockhash.blockhash;
-      tx.lastValidBlockHeight = latestBlockhash.lastValidBlockHeight;
-
-      const walletAccount = await connection.getAccountInfo(publicKey, "confirmed");
-      if (!walletAccount) {
-        const walletAddress = publicKey.toBase58();
-        const msg =
-          `Connected wallet ${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)} is not initialized on ${cluster}. ` +
-          `Switch Phantom to Devnet and fund this exact wallet with devnet SOL, then retry.`;
-        console.error("[RegistrationWizard] Wallet account not found on cluster", {
-          cluster,
-          rpcUrl,
-          wallet: walletAddress,
-        });
-        setError(msg);
-        setRegisterPhase("idle");
-        return;
-      }
-
-      const walletLamports = await connection.getBalance(publicKey, "confirmed");
-      if (walletLamports === 0) {
-        const walletAddress = publicKey.toBase58();
-        const msg =
-          `Connected wallet ${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)} has 0 SOL on ${cluster}. ` +
-          `Fund this wallet on devnet before registering.`;
-        console.error("[RegistrationWizard] Wallet has zero balance", {
-          cluster,
-          rpcUrl,
-          wallet: walletAddress,
-        });
-        setError(msg);
-        setRegisterPhase("idle");
-        return;
-      }
-
-      // Best-effort pre-send simulation for clearer diagnostics in dev.
-      try {
-        const simulation = await connection.simulateTransaction(tx);
-        if (simulation.value.err) {
-          const accountStates = await Promise.all(
-            ix.keys.map(async (k) => {
-              const info = await connection.getAccountInfo(k.pubkey, "confirmed");
-              return {
-                pubkey: k.pubkey.toBase58(),
-                exists: info != null,
-                lamports: info?.lamports ?? 0,
-                owner: info?.owner?.toBase58() ?? null,
-                executable: info?.executable ?? false,
-                isSigner: k.isSigner,
-                isWritable: k.isWritable,
-              };
-            })
-          );
-          console.error("[RegistrationWizard] register_keys simulation failed", {
-            rpcUrl,
-            cluster,
-            wallet: publicKey.toBase58(),
-            programId: ix.programId.toBase58(),
-            accounts: ix.keys.map((k) => ({
-              pubkey: k.pubkey.toBase58(),
-              isSigner: k.isSigner,
-              isWritable: k.isWritable,
-            })),
-            accountStates,
-            simulationErr: simulation.value.err,
-            simulationLogs: simulation.value.logs ?? [],
-          });
-        }
-      } catch (simulationError) {
-        console.warn("[RegistrationWizard] register_keys simulation unavailable", {
-          rpcUrl,
-          simulationError: toErrorMessage(simulationError),
-        });
-      }
-
-      const sig = await sendTransaction(tx, connection);
-      setTxSig(sig);
+      // OpaqueClient signs register_keys with the connected Solana wallet and confirms it.
+      await client.registerMetaAddress("solana");
       setRegisterPhase("confirming");
-      await connection.confirmTransaction(
-        {
-          signature: sig,
-          blockhash: latestBlockhash.blockhash,
-          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-        },
-        "confirmed"
-      );
       setRegisterPhase("idle");
       setStep("success");
       setTimeout(() => {
         onComplete();
       }, 1800);
     } catch (e) {
-      const nestedLines = extractNestedErrorLines(e);
-      const base = toErrorMessage(e);
-      const details = nestedLines.length > 0 ? nestedLines.slice(0, 4).join(" | ") : null;
-      const message = details ? `${base} — ${details}` : base;
-      console.error("[RegistrationWizard] register_keys failed", {
-        cluster,
-        rpcUrl: getRpcUrl(),
-        wallet: publicKey.toBase58(),
-        error: e,
-        parsedMessage: message,
-      });
-      setError(message || "Registration failed");
+      setError(toErrorMessage(e) || "Registration failed");
       setRegisterPhase("idle");
     }
   };
 
   const registerInProgress = registerPhase !== "idle";
   const progressSteps: { label: string; active: boolean; done: boolean }[] = [
-    { label: "Deriving Keys", active: registerPhase === "deriving", done: registerPhase !== "deriving" && (registerPhase === "broadcasting" || registerPhase === "confirming" || step === "success") },
-    { label: "Broadcasting Transaction", active: registerPhase === "broadcasting", done: registerPhase === "confirming" || step === "success" },
+    {
+      label: "Broadcasting Transaction",
+      active: registerPhase === "broadcasting",
+      done: registerPhase === "confirming" || step === "success",
+    },
     { label: "Confirming…", active: registerPhase === "confirming", done: step === "success" },
   ];
 
@@ -292,42 +119,14 @@ export function RegistrationWizard({ onComplete }: RegistrationWizardProps) {
               <div className="space-y-4">
                 <p className="text-sm text-neutral-400 leading-relaxed">
                   Your wallet is not yet registered on this cluster. To receive private payments, you
-                  need to generate and publish your Stealth Meta-Address. This is a one-time setup
-                  per cluster.
+                  need to publish your Stealth Meta-Address. This is a one-time setup per cluster.
                 </p>
                 <button
                   type="button"
-                  onClick={() => setStep("generate")}
+                  onClick={() => setStep("register")}
                   className="w-full py-3 px-4 rounded-lg text-sm font-medium btn-primary"
                 >
                   Continue
-                </button>
-              </div>
-            )}
-
-            {step === "generate" && (
-              <div className="space-y-4 mb-0">
-                <p className="text-sm text-neutral-400">
-                  Sign a message in your wallet to derive your spending and viewing keys. Keys are
-                  generated locally and never leave your device.
-                </p>
-                <label className="inline-flex items-center gap-2 text-xs text-mist cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={rememberSession}
-                    onChange={(e) => setRememberSession(e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-ink-600 bg-ink-900 accent-sol-purple"
-                  />
-                  Remember signature for this tab (about 30 minutes)
-                </label>
-                {error && <p className="text-sm text-red-400">{error}</p>}
-                <button
-                  type="button"
-                  onClick={handleGenerateKeys}
-                  disabled={signing}
-                  className="w-full py-3 px-4 rounded-lg text-sm font-medium bg-white text-black hover:opacity-90 disabled:opacity-50 transition-opacity"
-                >
-                  {signing ? "Check your wallet…" : "Generate Stealth Keys"}
                 </button>
               </div>
             )}
@@ -369,7 +168,7 @@ export function RegistrationWizard({ onComplete }: RegistrationWizardProps) {
                   <button
                     type="button"
                     onClick={handleRegister}
-                    disabled={!currentConfig || wrongCluster}
+                    disabled={!client || wrongCluster}
                     className="w-full py-3 px-4 rounded-lg text-sm font-medium btn-primary disabled:opacity-50 disabled:cursor-not-allowed mt-4"
                   >
                     Register on {cluster}

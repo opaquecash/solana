@@ -1,19 +1,15 @@
 import { useState, useRef, useCallback } from "react";
 import { QRCodeCanvas } from "qrcode.react";
-import { useKeys } from "../context/KeysContext";
-import { computeStealthAddressAndViewTag } from "../lib/stealth";
+import { useOpaqueSession } from "../opaque/useOpaqueSession";
+import { bytesToHex } from "../lib/format";
 import { getCluster } from "../lib/chain";
 import { useGhostAddressStore } from "../store/ghostAddressStore";
 import { useWatchlistStore } from "../hooks/useWatchlist";
 
 type Mode = "choose" | "payment_link" | "manual_ghost";
 
-function bytesToHex(b: Uint8Array): string {
-  return "0x" + Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
-}
-
 export function ReceiveView({ onBack }: { onBack: () => void }) {
-  const { isSetup, stealthMetaAddressHex } = useKeys();
+  const { client, isSetup, metaAddress: stealthMetaAddressHex } = useOpaqueSession();
   const [mode, setMode] = useState<Mode>("choose");
   const [copiedMeta, setCopiedMeta] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -54,7 +50,7 @@ export function ReceiveView({ onBack }: { onBack: () => void }) {
     }
   }, []);
 
-  if (!isSetup || !stealthMetaAddressHex) {
+  if (!isSetup || !stealthMetaAddressHex || !client) {
     return (
       <div className="card max-w-lg mx-auto text-center text-neutral-500">
         Complete setup first.
@@ -160,8 +156,10 @@ export function ReceiveView({ onBack }: { onBack: () => void }) {
     if (!ghostResult) {
       const generate = () => {
         try {
-          const { stealthAddress, ephemeralPriv } = computeStealthAddressAndViewTag(stealthMetaAddressHex);
-          const ephemeralPrivKeyHex = bytesToHex(ephemeralPriv);
+          // Derive a one-time stealth address for our own meta-address (no announcement yet).
+          const ghost = client.prepareGhostReceive();
+          const stealthAddress = ghost.stealthAddress;
+          const ephemeralPrivKeyHex = bytesToHex(ghost.ephemeralPrivateKey);
           if (ephemeralPrivKeyHex == null || ephemeralPrivKeyHex === "") {
             console.error("[Opaque] Ghost address key generation produced no ephemeral key.");
             return;

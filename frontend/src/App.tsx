@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { KeysProvider, useKeys } from "./context/KeysContext";
+import { KeysProvider } from "./context/KeysContext";
+import { useOpaqueSession } from "./opaque/useOpaqueSession";
 import { hasCompletedOnboardingTour, runOnboardingTour } from "./lib/onboardingTour";
 import { ProtocolLogProvider } from "./context/ProtocolLogContext";
 import { ToastProvider, useToast } from "./context/ToastContext";
@@ -30,9 +31,8 @@ function AppContent() {
   const [registrationJustCompleted, setRegistrationJustCompleted] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  useKeys();
   const { isConnected, address, cluster, isConnecting, connect, disconnect } = useWallet();
-  const { isSetup, clearKeys } = useKeys();
+  const { isSetup, disconnect: clearSession } = useOpaqueSession();
   const { isRegistered, isLoading: isRegistrationCheckLoading } = useRegistrationStatus(address, cluster);
   const clearVault = useVaultStore((s) => s.clear);
 
@@ -86,7 +86,7 @@ function AppContent() {
   }, [connect]);
 
   const handleDisconnect = () => {
-    clearKeys();
+    clearSession();
     clearVault();
     disconnect();
     setTab("dashboard");

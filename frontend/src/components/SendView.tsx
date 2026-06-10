@@ -1,17 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
-import {
-  Connection,
-  PublicKey,
-  Transaction,
-  SystemProgram,
-} from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { useWallet as useSolanaWallet } from "@solana/wallet-adapter-react";
-import { computeStealthAddressAndViewTag, formatSol, hexToBytes } from "../lib/stealth";
+import { formatSol, shortenAddress } from "../lib/format";
 import { getRpcUrl, getCluster } from "../lib/chain";
 import { getExplorerTxUrl } from "../lib/explorer";
-import { useKeys } from "../context/KeysContext";
+import { useOpaqueSession } from "../opaque/useOpaqueSession";
 import { getConfigForCluster } from "../contracts/contract-config";
-import { buildAnnounceInstruction, SCHEME_ID_SECP256K1 } from "../lib/contracts";
 import { ProtocolStepper } from "./ProtocolStepper";
 import type { ProtocolStep } from "./ProtocolStepper";
 import { useProtocolLog } from "../context/ProtocolLogContext";
@@ -25,8 +19,8 @@ const isMetaAddress = (value: string): boolean => {
 };
 
 export function SendView() {
-  const { isSetup } = useKeys();
-  const { publicKey, sendTransaction } = useSolanaWallet();
+  const { client, isSetup, ethereumAddress } = useOpaqueSession();
+  const { publicKey } = useSolanaWallet();
   const { push: logPush } = useProtocolLog();
   const pushTx = useTxHistoryStore((s) => s.push);
   const cluster = getCluster();
@@ -35,6 +29,7 @@ export function SendView() {
 
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
+  const [relayCrossChain, setRelayCrossChain] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -99,7 +94,7 @@ export function SendView() {
   const handleSend = async () => {
     setError(null);
     setTxHash(null);
-    if (!currentConfig || !publicKey || !sendTransaction) {
+    if (!client || !currentConfig || !publicKey) {
       setError("Connect your wallet on a supported cluster.");
       return;
     }
@@ -135,55 +130,41 @@ export function SendView() {
     };
 
     try {
-      const connection = new Connection(getRpcUrl(), "confirmed");
-      addStep("wait", "Deriving stealth destination…");
-      const {
-        stealthAddress,
-        stealthSolanaAddress,
-        ephemeralPubKey,
-        metadata,
-      } = computeStealthAddressAndViewTag(recipientMeta as `0x${string}`);
-      const destination = new PublicKey(stealthSolanaAddress);
-      addStep("ok", "Derived one-time stealth Solana address.", stealthSolanaAddress);
-      addStep("wait", "Building transfer + announcement transaction…");
+      addStep(
+        "wait",
+        relayCrossChain
+          ? "Sending transfer + cross-chain announcement…"
+          : "Deriving stealth destination + sending…",
+      );
       logPush("blockchain", "Preparing stealth SOL transfer + announce");
 
-      const tx = new Transaction();
-      tx.add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: destination,
-          lamports: value,
-        })
-      );
-      const announceIx = buildAnnounceInstruction(
-        publicKey,
-        SCHEME_ID_SECP256K1,
-        hexToBytes(stealthAddress),
-        ephemeralPubKey,
-        metadata,
-      );
-      tx.add(announceIx);
+      // One call: derive one-time stealth destination, transfer SOL, and announce
+      // (announce_with_relay when relaying cross-chain over Wormhole).
+      const result = await client.sendStealthPayment({
+        chain: "solana",
+        recipient: recipientMeta,
+        amount: value,
+        announce: true,
+        relay: relayCrossChain,
+      });
 
-      tx.feePayer = publicKey;
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      addStep("wait", "Awaiting wallet signature…");
-      const sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, "confirmed");
-      setTxHash(sig);
-      addStep("done", "Transfer confirmed.", sig);
-      logPush("blockchain", `Tx: ${sig.slice(0, 18)}…`);
+      setTxHash(result.txHash);
+      const destination = result.destination ?? result.stealthAddress;
+      addStep("done", "Transfer confirmed.", result.txHash);
+      if (relayCrossChain) {
+        addStep("done", "Announcement relayed to Ethereum via Wormhole.");
+      }
+      logPush("blockchain", `Tx: ${result.txHash.slice(0, 18)}…`);
 
-      const amountFormatted = formatSol(value);
       pushTx({
         cluster,
         kind: "sent",
-        counterparty: stealthSolanaAddress.slice(0, 6) + "…" + stealthSolanaAddress.slice(-4),
+        counterparty: shortenAddress(destination),
         amountLamports: value.toString(),
         tokenSymbol: "SOL",
         tokenAddress: null,
-        amount: amountFormatted,
-        txHash: sig,
+        amount: formatSol(value),
+        txHash: result.txHash,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Send failed";
@@ -251,6 +232,20 @@ export function SendView() {
             </p>
           )}
         </div>
+        <label className="flex items-start gap-2.5 rounded-lg border border-ink-700 bg-ink-900/30 px-3 py-2.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={relayCrossChain}
+            onChange={(e) => setRelayCrossChain(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 rounded border-ink-600 bg-ink-900 accent-sol-purple"
+          />
+          <span className="text-xs text-mist">
+            Also relay the announcement to Ethereum (Wormhole). The recipient sees it on either chain.
+            {ethereumAddress == null && (
+              <span className="block text-mist/60 mt-0.5">No Ethereum wallet needed to relay from Solana.</span>
+            )}
+          </span>
+        </label>
         {error && <p className="text-error text-sm">{error}</p>}
         {txHash &&
           (() => {
