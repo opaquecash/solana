@@ -1,0 +1,419 @@
+/**
+ * Phase 1.6 happy-path integration tests, run on the Anchor local validator
+ * (`anchor test --skip-build` after `anchor build --no-idl`).
+ *
+ * Instructions are built raw (discriminator + borsh) so the suite does not
+ * depend on IDL generation, which is unavailable for the anchor-syn 0.30.1
+ * programs (see .github/workflows/solana-programs.yml).
+ */
+import { createHash } from "node:crypto";
+import { expect } from "chai";
+import {
+  ComputeBudgetProgram,
+  Keypair,
+  SYSVAR_CLOCK_PUBKEY,
+  SYSVAR_RENT_PUBKEY,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
+import {
+  PROGRAMS,
+  WORMHOLE_CORE,
+  be32,
+  connection,
+  disc,
+  loadV2Fixture,
+  payer,
+  pda,
+  send,
+  sendExpectFail,
+  str,
+  u16le,
+  u32le,
+  u64le,
+  vec,
+} from "./helpers";
+
+const SYS = SystemProgram.programId;
+
+describe("stealth-registry", () => {
+  const metaAddress = Buffer.alloc(66, 7); // 66-byte V‖S placeholder
+  const entryPda = pda(PROGRAMS.stealthRegistry, [
+    Buffer.from("stealth_meta"),
+    payer.publicKey.toBuffer(),
+    u64le(1),
+  ]);
+
+  it("register_keys stores the 66-byte meta-address in the registry PDA", async () => {
+    await send([
+      new TransactionInstruction({
+        programId: PROGRAMS.stealthRegistry,
+        keys: [
+          { pubkey: entryPda, isSigner: false, isWritable: true },
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: SYS, isSigner: false, isWritable: false },
+        ],
+        data: Buffer.concat([disc("register_keys"), u64le(1), vec(metaAddress)]),
+      }),
+    ]);
+
+    const info = await connection.getAccountInfo(entryPda);
+    expect(info).to.not.be.null;
+    // RegistryEntry: 8 disc + 32 registrant + 8 scheme_id + 4 vec len + 66 bytes
+    const data = info!.data;
+    expect(data.subarray(8, 40)).to.deep.equal(payer.publicKey.toBuffer());
+    expect(data.readBigUInt64LE(40)).to.equal(1n);
+    expect(data.readUInt32LE(48)).to.equal(66);
+    expect(data.subarray(52, 118)).to.deep.equal(metaAddress);
+  });
+
+  it("resolve returns the registered meta-address", async () => {
+    const tx = new Transaction().add(
+      new TransactionInstruction({
+        programId: PROGRAMS.stealthRegistry,
+        keys: [{ pubkey: entryPda, isSigner: false, isWritable: false }],
+        data: disc("resolve"),
+      }),
+    );
+    tx.feePayer = payer.publicKey;
+    tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    tx.sign(payer);
+    const sim = await connection.simulateTransaction(tx);
+    expect(sim.value.err).to.be.null;
+    const ret = Buffer.from(sim.value.returnData!.data[0], "base64");
+    // borsh Vec<u8>: 4-byte LE length + bytes
+    expect(ret.readUInt32LE(0)).to.equal(66);
+    expect(ret.subarray(4, 70)).to.deep.equal(metaAddress);
+  });
+});
+
+describe("stealth-announcer", () => {
+  const stealthAddress = Buffer.alloc(20, 0xaa);
+  const ephemeralPubKey = Buffer.alloc(33, 2);
+  const metadata = Buffer.from([0xe1]); // view tag
+
+  it("announce emits the Announcement event", async () => {
+    const sig = await send([
+      new TransactionInstruction({
+        programId: PROGRAMS.stealthAnnouncer,
+        keys: [{ pubkey: payer.publicKey, isSigner: true, isWritable: true }],
+        data: Buffer.concat([
+          disc("announce"),
+          u64le(1),
+          vec(stealthAddress),
+          vec(ephemeralPubKey),
+          vec(metadata),
+        ]),
+      }),
+    ]);
+    const tx = await connection.getTransaction(sig, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    const logs = tx!.meta!.logMessages!.join("\n");
+    expect(logs).to.include("Program data:"); // anchor event emitted
+  });
+
+  it("announce rejects a wrong-length ephemeral key", async () => {
+    const logs = await sendExpectFail([
+      new TransactionInstruction({
+        programId: PROGRAMS.stealthAnnouncer,
+        keys: [{ pubkey: payer.publicKey, isSigner: true, isWritable: true }],
+        data: Buffer.concat([
+          disc("announce"),
+          u64le(1),
+          vec(stealthAddress),
+          vec(Buffer.alloc(32, 2)), // 32, not 33
+          vec(metadata),
+        ]),
+      }),
+    ]);
+    expect(logs).to.include("InvalidEphemeralKey");
+  });
+
+  it("announce_with_relay validates payload and reaches the Wormhole CPI boundary", async () => {
+    // The core bridge is not deployed on localnet, so the CPI must fail —
+    // but only after the local Announcement event is emitted, which proves
+    // argument encoding, account constraints, and payload validation.
+    const emitter = pda(PROGRAMS.stealthAnnouncer, [Buffer.from("emitter")]);
+    const whPda = (seed: string | Buffer) =>
+      pda(WORMHOLE_CORE, [typeof seed === "string" ? Buffer.from(seed) : seed]);
+    const sequence = pda(WORMHOLE_CORE, [Buffer.from("Sequence"), emitter.toBuffer()]);
+    const message = Keypair.generate();
+
+    const logs = await sendExpectFail(
+      [
+        new TransactionInstruction({
+          programId: PROGRAMS.stealthAnnouncer,
+          keys: [
+            { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+            { pubkey: emitter, isSigner: false, isWritable: false },
+            { pubkey: whPda("Bridge"), isSigner: false, isWritable: true },
+            { pubkey: whPda("fee_collector"), isSigner: false, isWritable: true },
+            { pubkey: sequence, isSigner: false, isWritable: true },
+            { pubkey: message.publicKey, isSigner: true, isWritable: true },
+            { pubkey: WORMHOLE_CORE, isSigner: false, isWritable: false },
+            { pubkey: SYSVAR_CLOCK_PUBKEY, isSigner: false, isWritable: false },
+            { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+            { pubkey: SYS, isSigner: false, isWritable: false },
+          ],
+          data: Buffer.concat([
+            disc("announce_with_relay"),
+            u64le(1),
+            vec(stealthAddress),
+            vec(ephemeralPubKey),
+            vec(metadata),
+            u32le(0), // batch_id
+            u64le(0), // wormhole_fee
+          ]),
+        }),
+      ],
+      [message],
+    );
+    expect(logs).to.include("Program data:"); // local Announcement emitted pre-CPI
+  });
+});
+
+describe("uab-receiver", () => {
+  const configPda = pda(PROGRAMS.uabReceiver, [Buffer.from("config")]);
+  const emitter = Buffer.alloc(32, 9);
+
+  it("initialize stores the trusted source emitter", async () => {
+    await send([
+      new TransactionInstruction({
+        programId: PROGRAMS.uabReceiver,
+        keys: [
+          { pubkey: configPda, isSigner: false, isWritable: true },
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: SYS, isSigner: false, isWritable: false },
+        ],
+        data: Buffer.concat([disc("initialize"), u16le(2), emitter]),
+      }),
+    ]);
+    const info = await connection.getAccountInfo(configPda);
+    // Config: 8 disc + 32 admin + 2 source_chain + 32 source_emitter + bump
+    expect(info!.data.readUInt16LE(40)).to.equal(2);
+    expect(info!.data.subarray(42, 74)).to.deep.equal(emitter);
+  });
+
+  function receiveIx(postedVaa: Keypair["publicKey"]): TransactionInstruction {
+    return new TransactionInstruction({
+      programId: PROGRAMS.uabReceiver,
+      keys: [
+        { pubkey: configPda, isSigner: false, isWritable: false },
+        { pubkey: postedVaa, isSigner: false, isWritable: false },
+        {
+          pubkey: pda(PROGRAMS.uabReceiver, [Buffer.from("processed"), postedVaa.toBuffer()]),
+          isSigner: false,
+          isWritable: true,
+        },
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: SYS, isSigner: false, isWritable: false },
+      ],
+      data: disc("receive_announcement"),
+    });
+  }
+
+  it("receive_announcement rejects a VAA account not owned by the core bridge", async () => {
+    const logs = await sendExpectFail([receiveIx(payer.publicKey)]);
+    expect(logs).to.include("NotWormholeOwned");
+  });
+
+  it("receive_announcement rejects a wormhole-owned account without the VAA magic", async () => {
+    const fake = Keypair.generate();
+    const rent = await connection.getMinimumBalanceForRentExemption(200);
+    await send(
+      [
+        SystemProgram.createAccount({
+          fromPubkey: payer.publicKey,
+          newAccountPubkey: fake.publicKey,
+          lamports: rent,
+          space: 200,
+          programId: WORMHOLE_CORE,
+        }),
+      ],
+      [fake],
+    );
+    const logs = await sendExpectFail([receiveIx(fake.publicKey)]);
+    expect(logs).to.include("NotPostedVaa");
+  });
+});
+
+describe("PSR V2: schema → attest → verify", () => {
+  const schemaName = "KycPassed";
+  const schemaId = createHash("sha256")
+    .update(payer.publicKey.toBuffer())
+    .update(Buffer.from(schemaName, "utf8"))
+    .update(Buffer.from([1]))
+    .digest();
+  const schemaPda = pda(PROGRAMS.schemaRegistry, [
+    Buffer.from("schema"),
+    payer.publicKey.toBuffer(),
+    schemaId,
+  ]);
+  const stealthAddressHash = Buffer.alloc(32, 0x5a);
+
+  it("register_schema enforces the canonical schema id and stores the schema", async () => {
+    await send([
+      new TransactionInstruction({
+        programId: PROGRAMS.schemaRegistry,
+        keys: [
+          { pubkey: schemaPda, isSigner: false, isWritable: true },
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: SYS, isSigner: false, isWritable: false },
+        ],
+        data: Buffer.concat([
+          disc("register_schema"),
+          schemaId,
+          str(schemaName),
+          str("bool passed"),
+          Buffer.from([1]), // revocable
+          Buffer.from([0]), // resolver: None
+          u64le(0), // schema_expiry_slot
+        ]),
+      }),
+    ]);
+    const info = await connection.getAccountInfo(schemaPda);
+    expect(info).to.not.be.null;
+    // SchemaPDA: 8 disc + 1 bump + 32 schema_id ...
+    expect(info!.data.subarray(9, 41)).to.deep.equal(schemaId);
+  });
+
+  it("attest issues a schema-bound attestation from an authorized issuer", async () => {
+    const attestationPda = pda(PROGRAMS.attestationEngineV2, [
+      Buffer.from("attestation_v2"),
+      schemaId,
+      payer.publicKey.toBuffer(),
+      stealthAddressHash,
+    ]);
+    await send([
+      new TransactionInstruction({
+        programId: PROGRAMS.attestationEngineV2,
+        keys: [
+          { pubkey: schemaPda, isSigner: false, isWritable: false },
+          { pubkey: attestationPda, isSigner: false, isWritable: true },
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          // resolver_program: None → pass the program id (anchor optional-account convention)
+          { pubkey: PROGRAMS.attestationEngineV2, isSigner: false, isWritable: false },
+          { pubkey: SYS, isSigner: false, isWritable: false },
+        ],
+        data: Buffer.concat([
+          disc("attest"),
+          stealthAddressHash,
+          vec(Buffer.from([1])), // data: bool passed = true
+          u64le(0), // expiration_slot
+          Buffer.alloc(32), // ref_uid
+        ]),
+      }),
+    ]);
+    const info = await connection.getAccountInfo(attestationPda);
+    expect(info).to.not.be.null;
+    // AttestationPDA: 8 disc + 1 bump + 32 uid + 32 schema_pda + 32 schema_id ...
+    expect(info!.data.subarray(73, 105)).to.deep.equal(schemaId);
+  });
+
+  it("verify_reputation accepts the real V2 fixture proof and consumes the nullifier", async () => {
+    const { proofA, proofB, proofC, publicSignals } = loadV2Fixture();
+    const rootBytes = be32(publicSignals[0]);
+    const nullifierHash = be32(publicSignals[3]);
+    const rep = PROGRAMS.reputationVerifier;
+    const configPda = pda(rep, [Buffer.from("verifier_config")]);
+    const historyPda = pda(rep, [Buffer.from("root_history")]);
+    const rootPda = pda(rep, [Buffer.from("merkle_root"), rootBytes]);
+    const nullifierPda = pda(rep, [Buffer.from("nullifier"), nullifierHash]);
+
+    await send([
+      new TransactionInstruction({
+        programId: rep,
+        keys: [
+          { pubkey: configPda, isSigner: false, isWritable: true },
+          { pubkey: historyPda, isSigner: false, isWritable: true },
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: PROGRAMS.groth16Verifier, isSigner: false, isWritable: false },
+          { pubkey: SYS, isSigner: false, isWritable: false },
+        ],
+        data: disc("initialize"),
+      }),
+    ]);
+    await send([
+      new TransactionInstruction({
+        programId: rep,
+        keys: [
+          { pubkey: configPda, isSigner: false, isWritable: false },
+          { pubkey: rootPda, isSigner: false, isWritable: true },
+          { pubkey: historyPda, isSigner: false, isWritable: true },
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: SYS, isSigner: false, isWritable: false },
+        ],
+        data: Buffer.concat([disc("update_merkle_root"), rootBytes]),
+      }),
+    ]);
+
+    const verifyIx = new TransactionInstruction({
+      programId: rep,
+      keys: [
+        { pubkey: configPda, isSigner: false, isWritable: false },
+        { pubkey: rootPda, isSigner: false, isWritable: false },
+        { pubkey: nullifierPda, isSigner: false, isWritable: true },
+        { pubkey: PROGRAMS.groth16Verifier, isSigner: false, isWritable: false },
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: SYS, isSigner: false, isWritable: false },
+      ],
+      data: Buffer.concat([
+        disc("verify_reputation"),
+        proofA,
+        proofB,
+        proofC,
+        rootBytes,
+        u64le(BigInt(publicSignals[1])), // attestation_id
+        u64le(BigInt(publicSignals[2])), // external_nullifier
+        nullifierHash,
+      ]),
+    });
+    await send([ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), verifyIx]);
+    const entry = await connection.getAccountInfo(nullifierPda);
+    expect(entry, "nullifier must be consumed on-chain").to.not.be.null;
+
+    // Replay must fail: the nullifier PDA already exists. A different CU limit
+    // makes this a distinct transaction so the RPC doesn't dedupe it.
+    const logs = await sendExpectFail([
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 399_999 }),
+      verifyIx,
+    ]);
+    expect(logs).to.match(/already in use|custom program error/i);
+  });
+
+  it("verify_reputation rejects a tampered proof", async () => {
+    const { proofA, proofB, proofC, publicSignals } = loadV2Fixture();
+    const rootBytes = be32(publicSignals[0]);
+    const tamperedNullifier = be32(BigInt(publicSignals[3]) ^ 1n);
+    const rep = PROGRAMS.reputationVerifier;
+
+    const logs = await sendExpectFail([
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+      new TransactionInstruction({
+        programId: rep,
+        keys: [
+          { pubkey: pda(rep, [Buffer.from("verifier_config")]), isSigner: false, isWritable: false },
+          { pubkey: pda(rep, [Buffer.from("merkle_root"), rootBytes]), isSigner: false, isWritable: false },
+          { pubkey: pda(rep, [Buffer.from("nullifier"), tamperedNullifier]), isSigner: false, isWritable: true },
+          { pubkey: PROGRAMS.groth16Verifier, isSigner: false, isWritable: false },
+          { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+          { pubkey: SYS, isSigner: false, isWritable: false },
+        ],
+        data: Buffer.concat([
+          disc("verify_reputation"),
+          proofA,
+          proofB,
+          proofC,
+          rootBytes,
+          u64le(BigInt(publicSignals[1])),
+          u64le(BigInt(publicSignals[2])),
+          tamperedNullifier,
+        ]),
+      }),
+    ]);
+    expect(logs).to.include("InvalidProof");
+  });
+});

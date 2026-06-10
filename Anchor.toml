@@ -23,8 +23,10 @@ uab_receiver = "7d4Sbmmpy954JwSNdjwf31pgbeWUQqwpgNdte5iy3vuM"
 [registry]
 url = "https://api.apr.dev"
 
+# Localnet so `anchor test` boots a local validator with all programs deployed.
+# Deploy to devnet explicitly with `--provider.cluster devnet`.
 [provider]
-cluster = "Devnet"
+cluster = "Localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
@@ -33,6 +35,3 @@ test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
 [test]
 startup_wait = 5000
 shutdown_wait = 2000
-
-[test.validator]
-url = "https://api.devnet.solana.com"

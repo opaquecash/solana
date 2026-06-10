@@ -55,13 +55,13 @@ jobs:
       - name: Build
         run: anchor build --no-idl
 
-      # Phase 1.6 adds tests/ (registry, announcer, UAB receiver, PSR V2).
-      # This step activates automatically once that directory lands.
-      - name: Test
+      # Integration tests (Phase 1.6) on the Anchor local validator.
+      # IDLs must exist for anchor's post-test log step; --skip-build because
+      # `anchor build --no-idl` already ran (plain `anchor test` would retry
+      # the IDL build and fail on the 0.30.1 programs).
+      - name: Integration tests
         run: |
-          if [ -d tests ]; then
-            solana-keygen new --no-bip39-passphrase --silent || true
-            anchor test
-          else
-            echo "No tests/ yet (Phase 1.6) — skipping"
-          fi
+          solana-keygen new --no-bip39-passphrase --silent || true
+          npm ci
+          bash scripts/generate-idls.sh
+          anchor test --skip-build
