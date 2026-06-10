@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type ReactNode } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { TestnetBanner } from "./TestnetBanner";
+import { EthConnectButton } from "./EthConnectButton";
 
 export type Tab =
   | "dashboard"
@@ -100,6 +101,7 @@ function DesktopNav({
         </div>
 
         <div className="relative flex items-center gap-3" ref={dropdownRef}>
+          <EthConnectButton />
           {!isConnected && (
             <button
               type="button"

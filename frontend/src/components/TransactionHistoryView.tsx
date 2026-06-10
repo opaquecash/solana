@@ -2,7 +2,7 @@ import { getCluster } from "../lib/chain";
 import { getExplorerTxUrl } from "../lib/explorer";
 import { useTxHistoryStore } from "../store/txHistoryStore";
 import type { TxHistoryEntry } from "../store/txHistoryStore";
-import { formatSol } from "../lib/stealth";
+import { formatSol } from "../lib/format";
 import { useWallet } from "../hooks/useWallet";
 
 function formatDate(ts: number): string {

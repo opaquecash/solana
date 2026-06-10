@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * Regression guard: the stealth-key derivation message must be defined ONCE and
- * never drift. Historically Solana's LandingView/RegistrationWizard signed a
- * different string than SetupView, deriving different keys (and a different
- * meta-address) for the same wallet — a fund-loss footgun. This check fails if:
- *   - lib/stealth.ts no longer exports the canonical SETUP_MESSAGE, or
- *   - any other source file redeclares `const SETUP_MESSAGE`, or
- *   - any other source file inlines the canonical/legacy message literal instead
- *     of importing SETUP_MESSAGE.
+ * Regression guard: the stealth-key derivation message must be defined ONCE (now in the SDK,
+ * `@opaquecash/opaque`) and never drift. Historically different views signed different strings,
+ * deriving different keys (and meta-addresses) for the same wallet — a fund-loss footgun.
  *
- * Must match spec/CSAP.md §2.2. Dependency-free; run with `node scripts/check-setup-message.mjs`.
+ * This check fails if:
+ *   - the SDK's canonical SETUP_MESSAGE no longer matches CSAP §2.2, or
+ *   - any frontend source file redeclares `const SETUP_MESSAGE`, or
+ *   - any frontend source file inlines the canonical/legacy literal instead of importing it
+ *     from `@opaquecash/opaque`.
+ *
+ * Dependency-free; run with `node scripts/check-setup-message.mjs`.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,8 @@ import { dirname, join, relative } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..", "src");
-const LIB = join(SRC, "lib", "stealth.ts");
+// SDK source of truth (solana/frontend/scripts -> opaque-protocol root -> sdk/...).
+const SDK_DKSAP = join(here, "..", "..", "..", "sdk", "packages", "opaque", "src", "crypto", "dksap.ts");
 
 const CANONICAL =
   "Sign this message to derive your Opaque Cash stealth keys. This does not approve any transaction.";
@@ -27,28 +29,30 @@ const LEGACY_LITERALS = [
 
 const errors = [];
 
-// 1. lib/stealth.ts exports the canonical message, byte-for-byte.
-const lib = readFileSync(LIB, "utf8");
-const m = lib.match(/export const SETUP_MESSAGE\s*=\s*"([^"]*)"/);
-if (!m) errors.push(`${relative(SRC, LIB)}: no 'export const SETUP_MESSAGE = "..."' found`);
+// 1. The SDK exports the canonical message, byte-for-byte.
+const sdk = readFileSync(SDK_DKSAP, "utf8");
+const m = sdk.match(/export const SETUP_MESSAGE\s*=\s*\n?\s*"([^"]*)"/);
+if (!m) errors.push(`${SDK_DKSAP}: no 'export const SETUP_MESSAGE = "..."' found`);
 else if (m[1] !== CANONICAL)
-  errors.push(`${relative(SRC, LIB)}: SETUP_MESSAGE does not match the canonical CSAP §2.2 string`);
+  errors.push(`${SDK_DKSAP}: SETUP_MESSAGE does not match the canonical CSAP §2.2 string`);
 
-// 2. No other source file may redeclare or inline the message.
+// 2. No frontend source file may redeclare or inline the message.
 const walk = (dir) => {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) { walk(p); continue; }
-    if (!/\.(ts|tsx)$/.test(name) || p === LIB) continue;
+    if (statSync(p).isDirectory()) {
+      walk(p);
+      continue;
+    }
+    if (!/\.(ts|tsx)$/.test(name)) continue;
     const src = readFileSync(p, "utf8");
     const rel = relative(SRC, p);
     if (/const\s+SETUP_MESSAGE\s*=/.test(src))
-      errors.push(`${rel}: redeclares a local SETUP_MESSAGE — import it from lib/stealth instead`);
+      errors.push(`${rel}: redeclares a local SETUP_MESSAGE — import it from @opaquecash/opaque instead`);
     if (src.includes(CANONICAL))
       errors.push(`${rel}: inlines the canonical message literal — import SETUP_MESSAGE instead`);
     for (const lit of LEGACY_LITERALS)
-      if (src.includes(lit))
-        errors.push(`${rel}: inlines a legacy message literal — use LEGACY_SOLANA_SETUP_MESSAGES`);
+      if (src.includes(lit)) errors.push(`${rel}: inlines a legacy message literal`);
   }
 };
 walk(SRC);
@@ -58,4 +62,4 @@ if (errors.length) {
   for (const e of errors) console.error("  - " + e);
   process.exit(1);
 }
-console.log("✓ setup-message check passed: one canonical SETUP_MESSAGE, no drift");
+console.log("✓ setup-message check passed: one canonical SETUP_MESSAGE (SDK), no drift");

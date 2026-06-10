@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import "./index.css";
 import App from "./App.tsx";
-import { KeysProvider } from "./context/KeysContext";
 import { NotFoundPage } from "./components/NotFoundPage.tsx";
 import { PrivacyPage } from "./components/PrivacyPage.tsx";
 import { TermsPage } from "./components/TermsPage.tsx";
@@ -44,7 +43,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/terms" element={<TermsPage />} />
             <Route path="/disclaimer" element={<DisclaimerPage />} />
             <Route path="/pay/success" element={<PaySuccessPage />} />
-            <Route path="/pay/:identifier" element={<KeysProvider><PayPage /></KeysProvider>} />
+            <Route path="/pay/:identifier" element={<PayPage />} />
             <Route path="/branding" element={<BrandingPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>

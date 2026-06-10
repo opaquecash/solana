@@ -33,7 +33,7 @@ const FEATURES = [
     icon: "⬡",
     accent: "green" as const,
     title: "Browser-native crypto",
-    body: "Rust → WASM for secp256k1 scanning, snarkjs + Circom for ZK proofs—runs entirely on-device with no server round-trips.",
+    body: "Rust → WASM for secp256k1 scanning, Groth16 + Circom for ZK proofs—runs entirely on-device with no server round-trips.",
   },
   {
     icon: "⛓",

@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { KeysProvider } from "./context/KeysContext";
 import { useOpaqueSession } from "./opaque/useOpaqueSession";
 import { hasCompletedOnboardingTour, runOnboardingTour } from "./lib/onboardingTour";
 import { ProtocolLogProvider } from "./context/ProtocolLogContext";
@@ -219,13 +218,11 @@ function ToastLayer() {
 
 export default function App() {
   return (
-    <KeysProvider>
-      <ProtocolLogProvider>
-        <ToastProvider>
-          <AppContent />
-          <ToastLayer />
-        </ToastProvider>
-      </ProtocolLogProvider>
-    </KeysProvider>
+    <ProtocolLogProvider>
+      <ToastProvider>
+        <AppContent />
+        <ToastLayer />
+      </ToastProvider>
+    </ProtocolLogProvider>
   );
 }

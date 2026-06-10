@@ -17,7 +17,7 @@ if (g.Buffer === undefined) {
 if (g.global === undefined) {
   g.global = globalThis;
 }
-// snarkjs/circom dependencies may reference Node's `process` in browser builds.
+// Some ZK proving dependencies may reference Node's `process` in browser builds.
 if (g.process === undefined) {
   g.process = process;
 }
