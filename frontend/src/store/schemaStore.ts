@@ -8,8 +8,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { SchemaV2 } from "../lib/schema";
-import type { AttestationV2 } from "../lib/attestationV2";
+import type { SchemaV2, AttestationV2 } from "@opaquecash/opaque";
 
 // =============================================================================
 // V2 discovered trait (from scanner WASM)

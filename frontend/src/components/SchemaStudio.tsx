@@ -7,21 +7,16 @@
  */
 
 import { useState, useId } from "react";
-import { PublicKey, Transaction } from "@solana/web3.js";
-import { useWallet } from "../hooks/useWallet";
-import {
-  fieldDefsToString,
-  prepareRegisterSchema,
-  SCHEMA_RENT_LAMPORTS,
-  type FieldDef,
-  type FieldType,
-} from "../lib/schema";
-import { buildRegisterSchemaInstruction, bytesToHex } from "../lib/programs";
-import { useSchemaStore } from "../store/schemaStore";
+import { fieldDefsToString, type FieldDef, type FieldType } from "@opaquecash/opaque";
+import { useOpaqueSession } from "../opaque/useOpaqueSession";
+import { PsrChainToggle, type PsrChain } from "./PsrChainToggle";
 
 // =============================================================================
 // Constants
 // =============================================================================
+
+/** Rough rent estimate shown in the cost line (lamports). */
+const SCHEMA_RENT_LAMPORTS = 2_000_000;
 
 const FIELD_TYPES: FieldType[] = ["bool", "u8", "u16", "u32", "u64", "string", "pubkey"];
 
@@ -40,9 +35,9 @@ const RESOLVER_OPTIONS: { value: ResolverType; label: string; description: strin
 // =============================================================================
 
 export function SchemaStudio() {
-  const { address: walletAddress, publicKey, sendTransaction, connection } = useWallet();
-  const addSchema = useSchemaStore((s) => s.addSchema);
+  const { client, isSetup, ethereumAddress } = useOpaqueSession();
 
+  const [psrChain, setPsrChain] = useState<PsrChain>("solana");
   const [name, setName] = useState("");
   const [fields, setFields] = useState<FieldDef[]>([
     { id: crypto.randomUUID(), name: "", type: "bool" },
@@ -61,8 +56,7 @@ export function SchemaStudio() {
   const fieldDefsString = fieldDefsToString(fields);
   const nameValid = name.trim().length > 0 && name.length <= 64;
   const fieldDefsValid = fieldDefsString.length <= 256;
-  const canSubmit =
-    walletAddress != null && publicKey != null && nameValid && fieldDefsValid && !isSubmitting;
+  const canSubmit = client != null && isSetup && nameValid && fieldDefsValid && !isSubmitting;
 
   const addField = () => {
     setFields((prev) => [
@@ -71,7 +65,7 @@ export function SchemaStudio() {
     ]);
   };
 
-  const updateField = (id: string, update: Partial<FieldDef>) => {
+  const updateField = (id: string, update: Partial<Omit<FieldDef, "id">>) => {
     setFields((prev) =>
       prev.map((f) => (f.id === id ? { ...f, ...update } : f))
     );
@@ -82,74 +76,26 @@ export function SchemaStudio() {
   };
 
   const handleSubmit = async () => {
-    if (!walletAddress || !publicKey || !canSubmit) return;
+    if (!client || !canSubmit) return;
     setIsSubmitting(true);
     setError(null);
     setTxSig(null);
 
     try {
-      const authority = publicKey;
-      const trimmedName = name.trim();
-      const resolverPk =
-        resolverType === "custom" && customResolver
-          ? new PublicKey(customResolver)
-          : null;
-      let expirySlotNum = 0;
-      if (hasExpiry) {
-        if (!expiryDateTime) {
-          throw new Error("Please select a schema expiration date and time.");
-        }
-        const targetMs = Date.parse(expiryDateTime);
-        if (!Number.isFinite(targetMs)) {
-          throw new Error("Invalid schema expiration date/time.");
-        }
-        const nowMs = Date.now();
-        if (targetMs <= nowMs) {
-          throw new Error("Schema expiration date/time must be in the future.");
-        }
-        const currentSlot = await connection.getSlot("confirmed");
-        const slotsUntilExpiry = Math.ceil((targetMs - nowMs) / 400); // ~400ms per slot
-        expirySlotNum = currentSlot + Math.max(1, slotsUntilExpiry);
+      if (hasExpiry && !expiryDateTime) {
+        throw new Error("Please select a schema expiration date and time.");
       }
-
-      const { schemaId, schemaPda } = await prepareRegisterSchema(
-        authority,
-        trimmedName
-      );
-
-      const ix = buildRegisterSchemaInstruction(
-        authority,
-        schemaPda,
-        schemaId,
-        trimmedName,
-        fieldDefsString,
+      const resolver =
+        resolverType === "custom" && customResolver.trim() ? customResolver.trim() : undefined;
+      // One call: derive the schemaId, resolve the expiry slot/block, and submit register_schema.
+      const res = await client.createSchema(psrChain, {
+        name: name.trim(),
+        fieldDefinitions: fields,
         revocable,
-        resolverPk,
-        expirySlotNum
-      );
-
-      const tx = new Transaction().add(ix);
-      const signature = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(signature, "confirmed");
-
-      const schemaIdHex = bytesToHex(schemaId);
-
-      addSchema({
-        address: schemaPda.toBase58(),
-        schemaId: schemaIdHex,
-        authority: walletAddress,
-        resolver: resolverPk ? resolverPk.toBase58() : "",
-        revocable,
-        name: trimmedName,
-        fieldDefinitions: fieldDefsString,
-        version: 1,
-        delegates: [],
-        createdAt: Date.now(),
-        schemaExpirySlot: expirySlotNum,
-        deprecated: false,
+        resolver,
+        schemaExpiry: hasExpiry ? { dateTime: expiryDateTime } : undefined,
       });
-
-      setTxSig(signature);
+      setTxSig(res.txHash);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to register schema");
     } finally {
@@ -171,7 +117,11 @@ export function SchemaStudio() {
             <strong className="text-white">{name}</strong> is now live on-chain.
           </p>
           <a
-            href={`https://explorer.solana.com/tx/${txSig}?cluster=devnet`}
+            href={
+              psrChain === "solana"
+                ? `https://explorer.solana.com/tx/${txSig}?cluster=devnet`
+                : `https://sepolia.etherscan.io/tx/${txSig}`
+            }
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs text-sol-purple hover:underline mt-2 inline-block font-mono"
@@ -198,11 +148,14 @@ export function SchemaStudio() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8 space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-white">Schema Studio</h1>
-        <p className="text-mist text-sm mt-1">
-          Define the template for a class of attestations and control who can issue them.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Schema Studio</h1>
+          <p className="text-mist text-sm mt-1">
+            Define the template for a class of attestations and control who can issue them.
+          </p>
+        </div>
+        <PsrChainToggle value={psrChain} onChange={setPsrChain} ethConnected={ethereumAddress != null} />
       </div>
 
       {/* Schema Name */}
@@ -390,8 +343,8 @@ export function SchemaStudio() {
         )}
       </button>
 
-      {!walletAddress && (
-        <p className="text-center text-xs text-mist">Connect your wallet to register a schema.</p>
+      {!isSetup && (
+        <p className="text-center text-xs text-mist">Complete key setup to register a schema.</p>
       )}
     </div>
   );
