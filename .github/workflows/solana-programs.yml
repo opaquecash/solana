@@ -37,8 +37,11 @@ jobs:
           fi
           anchor --version
 
+      # --no-idl: anchor-syn 0.30.1 (attestation-engine-v2, schema-registry)
+      # cannot compile its IDL generator under current rustc. IDLs are
+      # committed; re-enable IDL build once those programs move to 0.32.
       - name: Build
-        run: anchor build
+        run: anchor build --no-idl
 
       # Phase 1.6 adds tests/ (registry, announcer, UAB receiver, PSR V2).
       # This step activates automatically once that directory lands.
