@@ -16,6 +16,7 @@ import { isClusterSupported } from "./contracts/contract-config.ts";
 import { LandingPage } from "./components/LandingPage.tsx";
 import { BrandingPage } from "./components/BrandingPage.tsx";
 import { SolanaWalletProviders } from "./context/SolanaWalletProviders.tsx";
+import { OpaqueProviders } from "./opaque/OpaqueProviders.tsx";
 
 console.log("[Opaque] App bootstrapping…");
 
@@ -33,20 +34,22 @@ function LandingRoute() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <SolanaWalletProviders>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<LandingRoute />} />
-          <Route path="/app" element={<App />} />
-          <Route path="/privacy" element={<PrivacyPage />} />
-          <Route path="/terms" element={<TermsPage />} />
-          <Route path="/disclaimer" element={<DisclaimerPage />} />
-          <Route path="/pay/success" element={<PaySuccessPage />} />
-          <Route path="/pay/:identifier" element={<KeysProvider><PayPage /></KeysProvider>} />
-          <Route path="/branding" element={<BrandingPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </BrowserRouter>
-    </SolanaWalletProviders>
+    <OpaqueProviders>
+      <SolanaWalletProviders>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<LandingRoute />} />
+            <Route path="/app" element={<App />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/terms" element={<TermsPage />} />
+            <Route path="/disclaimer" element={<DisclaimerPage />} />
+            <Route path="/pay/success" element={<PaySuccessPage />} />
+            <Route path="/pay/:identifier" element={<KeysProvider><PayPage /></KeysProvider>} />
+            <Route path="/branding" element={<BrandingPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </BrowserRouter>
+      </SolanaWalletProviders>
+    </OpaqueProviders>
   </StrictMode>
 );
