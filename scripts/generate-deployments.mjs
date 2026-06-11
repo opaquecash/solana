@@ -54,6 +54,8 @@ const entries = CLUSTERS.map((cluster) => {
     "groth16_verifier",
     "reputation_verifier",
     "uab_receiver",
+    "ons_mirror",
+    "ons_registration",
   ];
   for (const key of required) {
     if (!programs[key]) throw new Error(`Missing ${key} in [programs.${cluster}]`);
