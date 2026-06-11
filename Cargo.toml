@@ -7,6 +7,8 @@ members = [
     "programs/schema-registry",
     "programs/attestation-engine-v2",
     "programs/uab-receiver",
+    "programs/ons-mirror",
+    "programs/ons-registration",
 ]
 resolver = "2"
 
