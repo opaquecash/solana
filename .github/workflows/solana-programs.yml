@@ -52,6 +52,11 @@ jobs:
       - name: Cargo tests
         run: cargo test -p groth16-verifier
 
+      - name: Clippy (security pre-audit gate)
+        # unexpected_cfgs is anchor-macro noise (anchor-debug / custom-heap cfgs);
+        # everything else is a hard error. See .github/pull_request_template.md.
+        run: cargo clippy --all-targets -- -D warnings -A unexpected_cfgs
+
       - name: Build
         run: anchor build --no-idl
 

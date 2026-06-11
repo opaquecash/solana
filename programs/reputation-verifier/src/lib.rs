@@ -66,6 +66,7 @@ pub mod reputation_verifier {
     /// `attestation_id` / `external_nullifier` cross the boundary as `u64` and are
     /// packed big-endian into 32 bytes — the prover MUST pack them identically
     /// when building the witness (see spec/PSR.md §field encoding).
+    #[allow(clippy::too_many_arguments)] // args mirror the on-wire proof encoding
     pub fn verify_reputation(
         ctx: Context<VerifyReputation>,
         proof_a: [u8; 64],
@@ -125,6 +126,7 @@ pub mod reputation_verifier {
 
     /// Read-only verification (does not consume the nullifier).
     /// Returns true if the proof would be valid.
+    #[allow(clippy::too_many_arguments)] // args mirror the on-wire proof encoding
     pub fn verify_reputation_view(
         ctx: Context<VerifyReputationView>,
         proof_a: [u8; 64],

@@ -1,12 +1,11 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::pubkey;
 
 declare_id!("7d4Sbmmpy954JwSNdjwf31pgbeWUQqwpgNdte5iy3vuM");
 
-/// Universal Announcement Bus receiver (Solana). Reads a Wormhole VAA that was posted to the
-/// core bridge, checks it came from the registered cross-chain sender, and re-emits the
-/// 96-byte payload as a local event so Solana scanners see the other chain's announcement.
-/// See spec/UAB.md.
+// Universal Announcement Bus receiver (Solana). Reads a Wormhole VAA that was posted to the
+// core bridge, checks it came from the registered cross-chain sender, and re-emits the
+// 96-byte payload as a local event so Solana scanners see the other chain's announcement.
+// See spec/UAB.md.
 
 /// Wormhole Core Contract on Solana devnet (Testnet environment).
 pub const WORMHOLE_CORE: Pubkey = pubkey!("3u8hJUVTA4jH1wYAyUur7FFZVQ8H635K3tSHHF4ssjQ5");
