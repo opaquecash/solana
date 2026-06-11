@@ -3,7 +3,8 @@
   "private": true,
   "description": "Anchor integration tests for the Opaque Solana programs (Phase 1.6)",
   "scripts": {
-    "test": "anchor test --skip-build"
+    "test": "anchor test --skip-build",
+    "generate": "node scripts/generate-deployments.mjs"
   },
   "devDependencies": {
     "@solana/web3.js": "^1.95.0",
