@@ -7,6 +7,8 @@
     "generate": "node scripts/generate-deployments.mjs"
   },
   "devDependencies": {
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
     "@solana/web3.js": "^1.95.0",
     "@types/chai": "^4.3.0",
     "@types/mocha": "^10.0.0",

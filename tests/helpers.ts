@@ -118,3 +118,48 @@ export function loadV2Fixture(): {
     publicSignals,
   };
 }
+
+// ---------------------------------------------------------------------------
+// DKSAP scanner math (Phase 3.1 cross-chain ownership assertions)
+// ---------------------------------------------------------------------------
+
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { keccak_256 } from "@noble/hashes/sha3";
+
+export const hexBytes = (s: string): Uint8Array =>
+  Uint8Array.from(Buffer.from(s.replace(/^0x/, ""), "hex"));
+
+/** The canonical CSAP DKSAP test vector (cross-validated scanner/SDK/circuits data). */
+export function loadDksapVector(): {
+  viewing_private_key: string;
+  spending_public_key: string;
+  ephemeral_public_key: string;
+  stealth_address: string;
+  view_tag: number;
+  scheme_id: number;
+} {
+  return JSON.parse(
+    readFileSync(`${__dirname}/../circuits/test/test_vectors.json`, "utf8"),
+  ).dksap[0];
+}
+
+/**
+ * Receiver-side DKSAP derivation (CSAP 2.3): shared = view_priv * EphPub;
+ * s_h = keccak256(shared); stealth = SpendPub + s_h * G; address =
+ * keccak256(uncompressed(stealth))[12..32]. This IS the scanner ownership check.
+ */
+export function deriveStealthAddress(
+  viewPriv: Uint8Array,
+  spendPub: Uint8Array,
+  ephPub: Uint8Array,
+): { address: Uint8Array; viewTag: number } {
+  const shared = secp256k1.getSharedSecret(viewPriv, ephPub, true);
+  const sH = keccak_256(shared);
+  const viewTag = sH[0];
+  const sHScalar = BigInt(`0x${Buffer.from(sH).toString("hex")}`) % secp256k1.CURVE.n;
+  const stealthPoint = secp256k1.ProjectivePoint.fromHex(
+    Buffer.from(spendPub).toString("hex"),
+  ).add(secp256k1.ProjectivePoint.BASE.multiply(sHScalar));
+  const uncompressed = stealthPoint.toRawBytes(false);
+  return { address: keccak_256(uncompressed.slice(1)).slice(12), viewTag };
+}
