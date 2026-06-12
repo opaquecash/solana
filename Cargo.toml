@@ -11,6 +11,7 @@ members = [
     "programs/ons-registration",
     "programs/relayer-registry",
     "programs/opaque-privacy-pool",
+    "programs/conditional-disclosure",
 ]
 resolver = "2"
 

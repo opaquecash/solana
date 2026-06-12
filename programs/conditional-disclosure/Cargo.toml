@@ -1,0 +1,25 @@
+[package]
+name = "conditional-disclosure"
+version = "0.1.0"
+description = "Conditional disclosure (threshold viewing keys) for Opaque Protocol on Solana"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "conditional_disclosure"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.32", features = ["init-if-needed"] }
+opaque-privacy-pool = { path = "../opaque-privacy-pool", features = ["no-entrypoint"] }
+solana-bn254 = "2.2"
+solana-keccak-hasher = "3"
+solana-secp256k1-recover = "2.2"
+solana-sha256-hasher = "3"

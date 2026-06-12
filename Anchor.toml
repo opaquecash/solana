@@ -14,6 +14,7 @@ ons_mirror = "D7EXuwcsGrUAYC6k69jrKvsKethsKYgR1pokkTcFvWsk"
 ons_registration = "5gfK9J8FJi3FpsQD33Hkrfwq8KqN4yadB2PDF9REnwMT"
 relayer_registry = "E4xmYaAU31dbNTbhfMfp2F24b48DAxJigvZTVbsKJREg"
 opaque_privacy_pool = "5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY"
+conditional_disclosure = "7sDCTbMDwjzYA3KHhNPZUVa8Swvj6adJTgSkJqmsn6V7"
 
 [programs.devnet]
 stealth_registry = "E9LBRG5eP2kvuNfveouqQ9tA5P6nrpyLyWFjH9MFYVno"
@@ -27,6 +28,7 @@ ons_mirror = "D7EXuwcsGrUAYC6k69jrKvsKethsKYgR1pokkTcFvWsk"
 ons_registration = "5gfK9J8FJi3FpsQD33Hkrfwq8KqN4yadB2PDF9REnwMT"
 relayer_registry = "E4xmYaAU31dbNTbhfMfp2F24b48DAxJigvZTVbsKJREg"
 opaque_privacy_pool = "5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY"
+conditional_disclosure = "7sDCTbMDwjzYA3KHhNPZUVa8Swvj6adJTgSkJqmsn6V7"
 
 [registry]
 url = "https://api.apr.dev"
