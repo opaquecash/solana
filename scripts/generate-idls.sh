@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 
 mkdir -p target/idl
 
-for p in stealth_registry stealth_announcer uab_receiver groth16_verifier reputation_verifier ons_mirror ons_registration relayer_registry opaque_privacy_pool; do
+for p in stealth_registry stealth_announcer uab_receiver groth16_verifier reputation_verifier ons_mirror ons_registration relayer_registry opaque_privacy_pool conditional_disclosure; do
   anchor idl build -p "$p" -o "target/idl/$p.json"
 done
 
