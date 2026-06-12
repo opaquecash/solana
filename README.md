@@ -66,4 +66,4 @@ Live devnet acceptance flows: `scripts/e2e-privacy-pool.mjs`, `scripts/e2e-discl
 
 ## License
 
-MIT.
+GPL-3.0.
