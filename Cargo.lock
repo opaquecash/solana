@@ -1698,6 +1698,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "relayer-registry"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang 0.32.1",
+ "solana-keccak-hasher",
+]
+
+[[package]]
 name = "reputation-verifier"
 version = "0.1.0"
 dependencies = [

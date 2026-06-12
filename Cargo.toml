@@ -9,6 +9,7 @@ members = [
     "programs/uab-receiver",
     "programs/ons-mirror",
     "programs/ons-registration",
+    "programs/relayer-registry",
 ]
 resolver = "2"
 
