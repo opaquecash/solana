@@ -10,6 +10,7 @@ members = [
     "programs/ons-mirror",
     "programs/ons-registration",
     "programs/relayer-registry",
+    "programs/opaque-privacy-pool",
 ]
 resolver = "2"
 

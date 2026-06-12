@@ -1,0 +1,23 @@
+[package]
+name = "opaque-privacy-pool"
+version = "0.1.0"
+description = "Privacy pool (amount privacy + association-set compliance) for Opaque Protocol on Solana"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "opaque_privacy_pool"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.32", features = ["init-if-needed"] }
+solana-bn254 = "2.2"
+solana-keccak-hasher = "3"
+solana-poseidon = "2.2"

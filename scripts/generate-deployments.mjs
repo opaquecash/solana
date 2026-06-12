@@ -57,6 +57,7 @@ const entries = CLUSTERS.map((cluster) => {
     "ons_mirror",
     "ons_registration",
     "relayer_registry",
+    "opaque_privacy_pool",
   ];
   for (const key of required) {
     if (!programs[key]) throw new Error(`Missing ${key} in [programs.${cluster}]`);
