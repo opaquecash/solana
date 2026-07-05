@@ -23,7 +23,7 @@ pub mod stealth_registry {
         stealth_meta_address: Vec<u8>,
     ) -> Result<()> {
         require!(
-            stealth_meta_address.len() == 66,
+            stealth_meta_address.len() == 98,
             RegistryError::InvalidMetaAddress
         );
 
@@ -58,7 +58,7 @@ pub mod stealth_registry {
         stealth_meta_address: Vec<u8>,
     ) -> Result<()> {
         require!(
-            stealth_meta_address.len() == 66,
+            stealth_meta_address.len() == 98,
             RegistryError::InvalidMetaAddress
         );
 
@@ -318,7 +318,7 @@ pub struct Resolve<'info> {
 pub struct RegistryEntry {
     pub registrant: Pubkey,
     pub scheme_id: u64,
-    /// 66 bytes: compressed(V) || compressed(S) for secp256k1.
+    /// 98 bytes: compressed(V) || compressed(S) (secp256k1) || S_ed (ed25519 Solana spend key).
     pub stealth_meta_address: Vec<u8>,
     pub bump: u8,
 }
@@ -328,7 +328,7 @@ impl RegistryEntry {
         8  // discriminator
         + 32 // registrant
         + 8  // scheme_id
-        + 4 + 66 // stealth_meta_address (vec prefix + 66 bytes)
+        + 4 + 98 // stealth_meta_address (vec prefix + 98 bytes)
         + 1  // bump
     }
 }
@@ -365,7 +365,7 @@ pub struct NonceIncremented {
 
 #[error_code]
 pub enum RegistryError {
-    #[msg("Stealth meta-address must be exactly 66 bytes (compressed V + S)")]
+    #[msg("Stealth meta-address must be exactly 98 bytes (compressed V + S + ed25519 S_ed)")]
     InvalidMetaAddress,
     #[msg("Invalid signature for registerKeysOnBehalf")]
     InvalidSignature,

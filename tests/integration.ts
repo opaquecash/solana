@@ -45,14 +45,14 @@ import {
 const SYS = SystemProgram.programId;
 
 describe("stealth-registry", () => {
-  const metaAddress = Buffer.alloc(66, 7); // 66-byte V‖S placeholder
+  const metaAddress = Buffer.alloc(98, 7); // 98-byte V‖S‖S_ed placeholder
   const entryPda = pda(PROGRAMS.stealthRegistry, [
     Buffer.from("stealth_meta"),
     payer.publicKey.toBuffer(),
     u64le(1),
   ]);
 
-  it("register_keys stores the 66-byte meta-address in the registry PDA", async () => {
+  it("register_keys stores the 98-byte meta-address in the registry PDA", async () => {
     await send([
       new TransactionInstruction({
         programId: PROGRAMS.stealthRegistry,
@@ -67,12 +67,12 @@ describe("stealth-registry", () => {
 
     const info = await connection.getAccountInfo(entryPda);
     expect(info).to.not.be.null;
-    // RegistryEntry: 8 disc + 32 registrant + 8 scheme_id + 4 vec len + 66 bytes
+    // RegistryEntry: 8 disc + 32 registrant + 8 scheme_id + 4 vec len + 98 bytes
     const data = info!.data;
     expect(data.subarray(8, 40)).to.deep.equal(payer.publicKey.toBuffer());
     expect(data.readBigUInt64LE(40)).to.equal(1n);
-    expect(data.readUInt32LE(48)).to.equal(66);
-    expect(data.subarray(52, 118)).to.deep.equal(metaAddress);
+    expect(data.readUInt32LE(48)).to.equal(98);
+    expect(data.subarray(52, 150)).to.deep.equal(metaAddress);
   });
 
   it("resolve returns the registered meta-address", async () => {
@@ -90,8 +90,8 @@ describe("stealth-registry", () => {
     expect(sim.value.err).to.be.null;
     const ret = Buffer.from(sim.value.returnData!.data[0], "base64");
     // borsh Vec<u8>: 4-byte LE length + bytes
-    expect(ret.readUInt32LE(0)).to.equal(66);
-    expect(ret.subarray(4, 70)).to.deep.equal(metaAddress);
+    expect(ret.readUInt32LE(0)).to.equal(98);
+    expect(ret.subarray(4, 102)).to.deep.equal(metaAddress);
   });
 });
 
@@ -143,7 +143,7 @@ describe("stealth-registry register_keys_on_behalf (OPQ-001)", () => {
 
   it("registers when authorized by the registrant's Ed25519 signature", async () => {
     const registrant = Keypair.generate();
-    const meta = Buffer.alloc(66, 9);
+    const meta = Buffer.alloc(98, 9);
     const message = authMessage(registrant.publicKey, 0n, meta);
     const signature = ed25519.sign(message, registrant.secretKey.subarray(0, 32));
     const edIx = Ed25519Program.createInstructionWithPublicKey({
@@ -157,7 +157,7 @@ describe("stealth-registry register_keys_on_behalf (OPQ-001)", () => {
     const info = await connection.getAccountInfo(entryPdaFor(registrant.publicKey));
     expect(info).to.not.be.null;
     expect(info!.data.subarray(8, 40)).to.deep.equal(registrant.publicKey.toBuffer());
-    expect(info!.data.subarray(52, 118)).to.deep.equal(meta);
+    expect(info!.data.subarray(52, 150)).to.deep.equal(meta);
     // nonce consumed (0 -> 1) so the signature cannot be replayed
     const nonceInfo = await connection.getAccountInfo(noncePdaFor(registrant.publicKey));
     expect(nonceInfo!.data.readBigUInt64LE(8)).to.equal(1n);
@@ -165,7 +165,7 @@ describe("stealth-registry register_keys_on_behalf (OPQ-001)", () => {
 
   it("rejects when no Ed25519 signature instruction is present", async () => {
     const registrant = Keypair.generate();
-    const meta = Buffer.alloc(66, 3);
+    const meta = Buffer.alloc(98, 3);
     const logs = await sendExpectFail([onBehalfIx(registrant.publicKey, meta)]);
     expect(logs).to.match(/InvalidSignature/);
     // nothing was written
@@ -175,7 +175,7 @@ describe("stealth-registry register_keys_on_behalf (OPQ-001)", () => {
   it("rejects a valid signature made by someone other than the registrant", async () => {
     const registrant = Keypair.generate();
     const attacker = Keypair.generate();
-    const meta = Buffer.alloc(66, 4);
+    const meta = Buffer.alloc(98, 4);
     // Attacker signs the exact required message, but with their own key.
     const message = authMessage(registrant.publicKey, 0n, meta);
     const signature = ed25519.sign(message, attacker.secretKey.subarray(0, 32));

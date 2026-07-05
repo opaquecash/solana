@@ -151,7 +151,7 @@ describe("relayer-market", () => {
             { pubkey: payer.publicKey, isSigner: true, isWritable: true },
             { pubkey: SYS, isSigner: false, isWritable: false },
           ],
-          data: Buffer.concat([disc("register_keys"), u64le(1n), vec(Buffer.alloc(66, 2))]),
+          data: Buffer.concat([disc("register_keys"), u64le(1n), vec(Buffer.alloc(98, 2))]),
         }),
       ]);
     }
