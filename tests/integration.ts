@@ -10,14 +10,17 @@ import { createHash } from "node:crypto";
 import { expect } from "chai";
 import {
   ComputeBudgetProgram,
+  Ed25519Program,
   Keypair,
   PublicKey,
   SYSVAR_CLOCK_PUBKEY,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   SYSVAR_RENT_PUBKEY,
   SystemProgram,
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
+import { ed25519 } from "@noble/curves/ed25519";
 import {
   PROGRAMS,
   WORMHOLE_CORE,
@@ -89,6 +92,101 @@ describe("stealth-registry", () => {
     // borsh Vec<u8>: 4-byte LE length + bytes
     expect(ret.readUInt32LE(0)).to.equal(66);
     expect(ret.subarray(4, 70)).to.deep.equal(metaAddress);
+  });
+});
+
+describe("stealth-registry register_keys_on_behalf (OPQ-001)", () => {
+  const AUTH_DOMAIN = Buffer.from("opaque-stealth-register-on-behalf-v1", "utf8");
+  const SCHEME = 1n;
+
+  /** The canonical message the on-chain program rebuilds and requires signed. */
+  function authMessage(
+    registrant: PublicKey,
+    nonce: bigint,
+    meta: Buffer,
+  ): Buffer {
+    return Buffer.concat([
+      AUTH_DOMAIN,
+      PROGRAMS.stealthRegistry.toBuffer(),
+      registrant.toBuffer(),
+      u64le(SCHEME),
+      u64le(nonce),
+      meta,
+    ]);
+  }
+
+  function entryPdaFor(registrant: PublicKey): PublicKey {
+    return pda(PROGRAMS.stealthRegistry, [
+      Buffer.from("stealth_meta"),
+      registrant.toBuffer(),
+      u64le(SCHEME),
+    ]);
+  }
+  function noncePdaFor(registrant: PublicKey): PublicKey {
+    return pda(PROGRAMS.stealthRegistry, [Buffer.from("nonce"), registrant.toBuffer()]);
+  }
+
+  function onBehalfIx(registrant: PublicKey, meta: Buffer): TransactionInstruction {
+    return new TransactionInstruction({
+      programId: PROGRAMS.stealthRegistry,
+      keys: [
+        { pubkey: entryPdaFor(registrant), isSigner: false, isWritable: true },
+        { pubkey: registrant, isSigner: false, isWritable: false },
+        { pubkey: noncePdaFor(registrant), isSigner: false, isWritable: true },
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: SYS, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+      ],
+      data: Buffer.concat([disc("register_keys_on_behalf"), u64le(SCHEME), vec(meta)]),
+    });
+  }
+
+  it("registers when authorized by the registrant's Ed25519 signature", async () => {
+    const registrant = Keypair.generate();
+    const meta = Buffer.alloc(66, 9);
+    const message = authMessage(registrant.publicKey, 0n, meta);
+    const signature = ed25519.sign(message, registrant.secretKey.subarray(0, 32));
+    const edIx = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: registrant.publicKey.toBytes(),
+      message,
+      signature,
+    });
+
+    await send([edIx, onBehalfIx(registrant.publicKey, meta)]);
+
+    const info = await connection.getAccountInfo(entryPdaFor(registrant.publicKey));
+    expect(info).to.not.be.null;
+    expect(info!.data.subarray(8, 40)).to.deep.equal(registrant.publicKey.toBuffer());
+    expect(info!.data.subarray(52, 118)).to.deep.equal(meta);
+    // nonce consumed (0 -> 1) so the signature cannot be replayed
+    const nonceInfo = await connection.getAccountInfo(noncePdaFor(registrant.publicKey));
+    expect(nonceInfo!.data.readBigUInt64LE(8)).to.equal(1n);
+  });
+
+  it("rejects when no Ed25519 signature instruction is present", async () => {
+    const registrant = Keypair.generate();
+    const meta = Buffer.alloc(66, 3);
+    const logs = await sendExpectFail([onBehalfIx(registrant.publicKey, meta)]);
+    expect(logs).to.match(/InvalidSignature/);
+    // nothing was written
+    expect(await connection.getAccountInfo(entryPdaFor(registrant.publicKey))).to.be.null;
+  });
+
+  it("rejects a valid signature made by someone other than the registrant", async () => {
+    const registrant = Keypair.generate();
+    const attacker = Keypair.generate();
+    const meta = Buffer.alloc(66, 4);
+    // Attacker signs the exact required message, but with their own key.
+    const message = authMessage(registrant.publicKey, 0n, meta);
+    const signature = ed25519.sign(message, attacker.secretKey.subarray(0, 32));
+    const edIx = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: attacker.publicKey.toBytes(),
+      message,
+      signature,
+    });
+    const logs = await sendExpectFail([edIx, onBehalfIx(registrant.publicKey, meta)]);
+    expect(logs).to.match(/InvalidSignature/);
+    expect(await connection.getAccountInfo(entryPdaFor(registrant.publicKey))).to.be.null;
   });
 });
 

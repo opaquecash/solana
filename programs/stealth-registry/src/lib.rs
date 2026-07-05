@@ -1,6 +1,12 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::sysvar::instructions::{
+    load_current_index_checked, load_instruction_at_checked,
+};
 
 declare_id!("E9LBRG5eP2kvuNfveouqQ9tA5P6nrpyLyWFjH9MFYVno");
+
+/// Native Ed25519 SigVerify program address.
+const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
 
 /// Stealth Meta-Address Registry — maps Solana accounts to their stealth meta-addresses.
 /// Equivalent to ERC-6538 on Ethereum. One singleton per cluster.
@@ -37,7 +43,15 @@ pub mod stealth_registry {
     }
 
     /// Register on behalf of another account (requires ED25519 signature verification).
-    /// The registrant must sign an off-chain message authorizing this registration.
+    ///
+    /// The registrant authorises the registration out-of-band by signing a canonical
+    /// message with their ed25519 key; a separate `payer` then submits the transaction
+    /// (gasless / relayed registration). The transaction MUST include an Ed25519
+    /// SigVerify instruction over that exact message before this one; the native Ed25519
+    /// program checks the signature cryptographically and this handler confirms the
+    /// verified `(pubkey, message)` pair is the one it requires. The message binds the
+    /// program id, registrant, scheme, current nonce, and meta-address, and the nonce is
+    /// consumed on success so the signature cannot be replayed.
     pub fn register_keys_on_behalf(
         ctx: Context<RegisterKeysOnBehalf>,
         scheme_id: u64,
@@ -48,18 +62,34 @@ pub mod stealth_registry {
             RegistryError::InvalidMetaAddress
         );
 
-        let entry = &mut ctx.accounts.registry_entry;
-        let nonce_account = &mut ctx.accounts.nonce_account;
+        let registrant = ctx.accounts.registrant.key();
+        let current_nonce = ctx.accounts.nonce_account.nonce;
 
-        entry.registrant = ctx.accounts.registrant.key();
+        let message = build_authorization_message(
+            &registrant,
+            scheme_id,
+            current_nonce,
+            &stealth_meta_address,
+        );
+        verify_ed25519_authorization(
+            &ctx.accounts.instructions_sysvar.to_account_info(),
+            &registrant,
+            &message,
+        )?;
+
+        let entry = &mut ctx.accounts.registry_entry;
+        entry.registrant = registrant;
         entry.scheme_id = scheme_id;
         entry.stealth_meta_address = stealth_meta_address.clone();
         entry.bump = ctx.bumps.registry_entry;
 
-        nonce_account.nonce += 1;
+        // Consume the nonce so the authorising signature cannot be replayed.
+        ctx.accounts.nonce_account.nonce = current_nonce
+            .checked_add(1)
+            .ok_or(RegistryError::InvalidSignature)?;
 
         emit!(StealthMetaAddressSet {
-            registrant: ctx.accounts.registrant.key(),
+            registrant,
             scheme_id,
             stealth_meta_address,
         });
@@ -85,6 +115,118 @@ pub mod stealth_registry {
     pub fn resolve(ctx: Context<Resolve>) -> Result<Vec<u8>> {
         Ok(ctx.accounts.registry_entry.stealth_meta_address.clone())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Ed25519 authorization for register_keys_on_behalf
+// ---------------------------------------------------------------------------
+
+/// Domain tag for the canonical message the registrant signs to authorise a
+/// `register_keys_on_behalf`. Bump when the message layout changes.
+const REGISTER_ON_BEHALF_DOMAIN: &[u8] = b"opaque-stealth-register-on-behalf-v1";
+
+/// Build the canonical message that `registrant` must sign. Binding the program
+/// id, registrant, scheme, current nonce, and meta-address prevents the
+/// signature from being reused for a different program, registrant, scheme, or
+/// meta-address, and (with the monotonic nonce) from being replayed.
+fn build_authorization_message(
+    registrant: &Pubkey,
+    scheme_id: u64,
+    nonce: u64,
+    stealth_meta_address: &[u8],
+) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(
+        REGISTER_ON_BEHALF_DOMAIN.len() + 32 + 32 + 8 + 8 + stealth_meta_address.len(),
+    );
+    msg.extend_from_slice(REGISTER_ON_BEHALF_DOMAIN);
+    msg.extend_from_slice(crate::ID.as_ref());
+    msg.extend_from_slice(registrant.as_ref());
+    msg.extend_from_slice(&scheme_id.to_le_bytes());
+    msg.extend_from_slice(&nonce.to_le_bytes());
+    msg.extend_from_slice(stealth_meta_address);
+    msg
+}
+
+/// Confirm the transaction contains an Ed25519 SigVerify instruction (before the
+/// current instruction) proving `expected_signer` signed `expected_message`. The
+/// native Ed25519 program has already verified the signature cryptographically;
+/// we only re-derive that the verified `(pubkey, message)` pair is the one we
+/// require and that it is carried inline in that instruction.
+fn verify_ed25519_authorization(
+    instructions_sysvar: &AccountInfo,
+    expected_signer: &Pubkey,
+    expected_message: &[u8],
+) -> Result<()> {
+    let current_index = load_current_index_checked(instructions_sysvar)? as usize;
+    for i in 0..current_index {
+        let ix = load_instruction_at_checked(i, instructions_sysvar)?;
+        if ix.program_id != ED25519_PROGRAM_ID {
+            continue;
+        }
+        if ed25519_instruction_authorizes(&ix.data, i as u16, expected_signer, expected_message) {
+            return Ok(());
+        }
+    }
+    Err(RegistryError::InvalidSignature.into())
+}
+
+/// Parse a single-signature Ed25519 SigVerify instruction and check that it
+/// verified `expected_signer` over `expected_message`, with the public key,
+/// signature, and message all carried inline in this same instruction (rather
+/// than borrowed from another, attacker-controlled instruction).
+fn ed25519_instruction_authorizes(
+    data: &[u8],
+    ix_index: u16,
+    expected_signer: &Pubkey,
+    expected_message: &[u8],
+) -> bool {
+    const HEADER_LEN: usize = 16;
+    const SIGNATURE_LEN: usize = 64;
+    const PUBKEY_LEN: usize = 32;
+    // The native/web3.js builder uses u16::MAX to mean "data lives in this ix".
+    const IX_INDEX_CURRENT: u16 = u16::MAX;
+
+    if data.len() < HEADER_LEN {
+        return false;
+    }
+    // Exactly one signature is expected.
+    if data[0] != 1 {
+        return false;
+    }
+
+    let read_u16 = |o: usize| u16::from_le_bytes([data[o], data[o + 1]]);
+    let signature_offset = read_u16(2) as usize;
+    let signature_ix_index = read_u16(4);
+    let public_key_offset = read_u16(6) as usize;
+    let public_key_ix_index = read_u16(8);
+    let message_data_offset = read_u16(10) as usize;
+    let message_data_size = read_u16(12) as usize;
+    let message_ix_index = read_u16(14);
+
+    let inline = |idx: u16| idx == IX_INDEX_CURRENT || idx == ix_index;
+    if !inline(signature_ix_index) || !inline(public_key_ix_index) || !inline(message_ix_index) {
+        return false;
+    }
+
+    let pk_end = match public_key_offset.checked_add(PUBKEY_LEN) {
+        Some(v) => v,
+        None => return false,
+    };
+    let sig_end = match signature_offset.checked_add(SIGNATURE_LEN) {
+        Some(v) => v,
+        None => return false,
+    };
+    let msg_end = match message_data_offset.checked_add(message_data_size) {
+        Some(v) => v,
+        None => return false,
+    };
+    if pk_end > data.len() || sig_end > data.len() || msg_end > data.len() {
+        return false;
+    }
+
+    let pubkey = &data[public_key_offset..pk_end];
+    let message = &data[message_data_offset..msg_end];
+    pubkey == expected_signer.as_ref() && message == expected_message
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +280,12 @@ pub struct RegisterKeysOnBehalf<'info> {
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// Instructions sysvar, introspected to confirm the Ed25519 SigVerify
+    /// instruction that authorises this registration.
+    /// CHECK: constrained to the Instructions sysvar address.
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub instructions_sysvar: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
