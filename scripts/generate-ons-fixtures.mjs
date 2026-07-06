@@ -135,7 +135,7 @@ function mirrorRecord(label, solAuthority) {
     [Buffer.from("ons_mirror"), hash],
     ONS_MIRROR,
   );
-  const data = Buffer.alloc(8 + 32 + 33 + 33 + 20 + 32 + 8 + 8 + 1);
+  const data = Buffer.alloc(8 + 32 + 33 + 33 + 20 + 32 + 8 + 8 + 1 + 1);
   discAccount("OnsRecord").copy(data, 0);
   hash.copy(data, 8);
   SPEND.copy(data, 40);
@@ -145,6 +145,7 @@ function mirrorRecord(label, solAuthority) {
   data.writeBigUInt64LE(20n, 158); // wormhole_sequence
   data.writeBigInt64LE(1_700_000_000n, 166); // updated_at
   data[174] = bump;
+  // data[175] = revoked (0 = live record)
   return account(pdaAddr.toBase58(), ONS_MIRROR.toBase58(), data);
 }
 

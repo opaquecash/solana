@@ -102,27 +102,44 @@ pub mod ons_mirror {
             u64::from_le_bytes(data[OFF_SEQUENCE..OFF_SEQUENCE + 8].try_into().unwrap());
 
         let record = &mut ctx.accounts.record;
-        // A pre-existing record only moves forward in sequence (out-of-order delivery).
+        // The monotonic-sequence floor must hold across the record's whole lifetime,
+        // including after a revoke (OPQ-004). A pre-existing record — one that has been
+        // written before, so `name_hash` is set — only ever moves forward in sequence.
+        // `init_if_needed` leaves a genuinely new record with `name_hash == [0u8; 32]`,
+        // the only case that skips the floor: a first write has no prior state to revert
+        // to, and any lower-sequence delivery is superseded once a higher one arrives.
         if record.name_hash == name_hash {
             require!(sequence > record.wormhole_sequence, OnsMirrorError::StaleSequence);
         }
 
         ctx.accounts.processed.bump = ctx.bumps.processed;
 
+        // Common fields for both actions. Crucially, a revoke updates `name_hash` and
+        // `wormhole_sequence` in place (tombstone) instead of closing the account, so the
+        // floor survives and a later stale VAA cannot resurrect the name at an old
+        // sequence.
+        record.name_hash = name_hash;
+        record.wormhole_sequence = sequence;
+        record.updated_at = Clock::get()?.unix_timestamp;
+        record.bump = ctx.bumps.record;
+
         if action == ACTION_REVOKE {
+            // Tombstone: keep the account (retaining the sequence floor) but wipe the
+            // resolvable key material so no one resolves the revoked name.
+            record.spend_pubkey = [0u8; 33];
+            record.view_pubkey = [0u8; 33];
+            record.eth_owner = [0u8; 20];
+            record.sol_authority = Pubkey::default();
+            record.revoked = true;
             emit!(NameRecordRevoked { name_hash, sequence });
-            record.close(ctx.accounts.relayer.to_account_info())?;
             return Ok(());
         }
 
-        record.name_hash = name_hash;
         record.spend_pubkey.copy_from_slice(&payload[34..67]);
         record.view_pubkey.copy_from_slice(&payload[67..100]);
         record.eth_owner.copy_from_slice(&payload[112..132]); // low 20 bytes of the padded word
         record.sol_authority = Pubkey::new_from_array(payload[132..164].try_into().unwrap());
-        record.wormhole_sequence = sequence;
-        record.updated_at = Clock::get()?.unix_timestamp;
-        record.bump = ctx.bumps.record;
+        record.revoked = false;
 
         emit!(NameRecordUpserted {
             name_hash,
@@ -205,10 +222,13 @@ pub struct OnsRecord {
     pub wormhole_sequence: u64,
     pub updated_at: i64,
     pub bump: u8,
+    /// True once revoked: the account is a tombstone (key material zeroed) that only
+    /// preserves the sequence floor. Resolvers MUST treat a revoked record as unresolved.
+    pub revoked: bool,
 }
 
 impl OnsRecord {
-    pub const LEN: usize = 32 + 33 + 33 + 20 + 32 + 8 + 8 + 1;
+    pub const LEN: usize = 32 + 33 + 33 + 20 + 32 + 8 + 8 + 1 + 1;
 }
 
 #[account]

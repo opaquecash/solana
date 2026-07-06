@@ -139,10 +139,23 @@ describe("ons-mirror", () => {
     expect(logs).to.include("StaleSequence");
   });
 
-  it("applies a revoke VAA by closing the record", async () => {
+  it("applies a revoke VAA by tombstoning the record (retains the sequence floor)", async () => {
     await send([receiveRecordIx(VAA_REVOKE, nameHash("alice"))]);
     const info = await connection.getAccountInfo(mirrorRecord("alice"));
-    expect(info).to.be.null;
+    // The account persists as a tombstone: key material wiped, sequence floor kept.
+    expect(info).to.not.be.null;
+    const data = info!.data;
+    expect(data.subarray(40, 73).equals(Buffer.alloc(33))).to.equal(true); // spend zeroed
+    expect(data.subarray(73, 106).equals(Buffer.alloc(33))).to.equal(true); // view zeroed
+    expect(data.readBigUInt64LE(158)).to.equal(12n); // wormhole_sequence = revoke seq
+    expect(data[175]).to.equal(1); // revoked = true
+  });
+
+  it("rejects a stale upsert after a revoke (OPQ-004 sticky replay)", async () => {
+    // With the old close-based revoke, VAA_STALE (seq 5) would resurrect "alice" at the
+    // attacker's stale keys. The tombstone keeps the seq-12 floor, so it is rejected.
+    const logs = await sendExpectFail([receiveRecordIx(VAA_STALE, nameHash("alice"))]);
+    expect(logs).to.include("StaleSequence");
   });
 });
 

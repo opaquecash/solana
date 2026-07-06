@@ -28,10 +28,11 @@ const PAYLOAD_VERSION: u8 = 1;
 const ACTION_CLAIM: u8 = 1;
 
 // ons-mirror OnsRecord layout: 8 (discriminator) + name_hash 32 + spend 33 + view 33 +
-// eth_owner 20 = offset 126 for sol_authority.
+// eth_owner 20 = offset 126 for sol_authority; trailing bump + revoked flag.
+// Keep in sync with programs/ons-mirror OnsRecord::LEN.
 const MIRROR_OFF_NAME_HASH: usize = 8;
 const MIRROR_OFF_SOL_AUTHORITY: usize = 126;
-const MIRROR_RECORD_LEN: usize = 8 + 167;
+const MIRROR_RECORD_LEN: usize = 8 + 168;
 
 #[program]
 pub mod ons_registration {
