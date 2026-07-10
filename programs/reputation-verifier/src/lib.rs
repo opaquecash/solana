@@ -2,6 +2,10 @@ use anchor_lang::prelude::*;
 
 declare_id!("BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM");
 
+/// The trusted project deployer. Only this key may run the one-time `initialize`, so a
+/// front-runner cannot become `admin` (and register arbitrary roots) on deployment (OPQ-007).
+const EXPECTED_DEPLOYER: Pubkey = pubkey!("Fre7wzH8UpCJn9QSU9v3CCMyARkMxKrZTV5MQb43CoPF");
+
 /// Maximum age of a Merkle root (in seconds) before it's considered stale.
 const ROOT_EXPIRY_SECS: i64 = 3600; // 1 hour
 
@@ -210,10 +214,15 @@ pub struct Initialize<'info> {
     )]
     pub root_history: Account<'info, RootHistory>,
 
-    #[account(mut)]
+    // Gate initialization to the trusted deployer so a front-runner cannot become the `admin`
+    // (and register arbitrary Merkle roots) on a fresh deployment (OPQ-007).
+    #[account(mut, constraint = admin.key() == EXPECTED_DEPLOYER @ ReputationError::Unauthorized)]
     pub admin: Signer<'info>,
 
-    /// CHECK: The Groth16 verifier program ID.
+    /// CHECK: The real Groth16 verifier, pinned by address (and required executable) so a
+    /// front-runner cannot record a rogue verifier that always returns Ok(true) and bypasses
+    /// the ZK gate for every downstream consumer (OPQ-007).
+    #[account(executable, address = groth16_verifier::ID)]
     pub groth16_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,

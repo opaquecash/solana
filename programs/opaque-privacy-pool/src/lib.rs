@@ -9,6 +9,10 @@ use solana_poseidon::{hashv as poseidon_hashv, Endianness, Parameters};
 
 declare_id!("5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY");
 
+/// The trusted project deployer. Only this key may run the one-time `initialize`, so a
+/// front-runner cannot seize the ASP authority on a fresh deployment (OPQ-007).
+const EXPECTED_DEPLOYER: Pubkey = pubkey!("Fre7wzH8UpCJn9QSU9v3CCMyARkMxKrZTV5MQb43CoPF");
+
 // Privacy pool on Solana (spec/privacy-pool.md): amount privacy via the Privacy Pools
 // (Buterin/Soleimani association-set) construction. Deposits insert
 // commitment = Poseidon(value, label, Poseidon(nullifier, secret)) into an append-only
@@ -379,7 +383,10 @@ fn alt_bn128_g1_mul(point: &[u8; 64], scalar: &[u8; 32]) -> Result<[u8; 64]> {
 pub struct Initialize<'info> {
     #[account(init, payer = payer, space = 8 + Pool::LEN, seeds = [b"pool"], bump)]
     pub pool: Account<'info, Pool>,
-    #[account(mut)]
+    // Gate initialization to the trusted deployer. `initialize` chooses the ASP authority (the
+    // only key that can post an asp_root), so an unprotected initializer let a front-runner win
+    // it on a fresh deployment and freeze every withdrawal (OPQ-007).
+    #[account(mut, constraint = payer.key() == EXPECTED_DEPLOYER @ PoolError::Unauthorized)]
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
@@ -504,6 +511,8 @@ pub enum PoolError {
     Bn128Failed,
     #[msg("BN254 pairing failed")]
     PairingFailed,
+    #[msg("Unauthorized: caller is not the program upgrade authority")]
+    Unauthorized,
 }
 
 // VK constants appended below by the build step (export_solana_vk.py POOL).
