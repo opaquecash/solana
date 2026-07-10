@@ -62,8 +62,12 @@ pub mod conditional_disclosure {
         m: u8,
         n: u8,
     ) -> Result<()> {
+        // Require x < n (curve order), not just x < p: BIP-340 verification recovers R via a
+        // syscall that needs r < n, so an x-coordinate in [n, p) would register a policy that
+        // can never be satisfied. Rejecting it at registration prevents a permanently
+        // un-verifiable policy (OPQ-042a).
         require!(
-            group_key_x != [0u8; 32] && lt_be(&group_key_x, &SECP_P),
+            group_key_x != [0u8; 32] && lt_be(&group_key_x, &SECP_N),
             DisclosureError::InvalidGroupKey
         );
         require!(m >= 1 && n >= m, DisclosureError::InvalidQuorum);

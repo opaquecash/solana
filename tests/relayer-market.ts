@@ -273,11 +273,12 @@ describe("relayer-market", () => {
     const relayerAfter = (await connection.getAccountInfo(relayerPda(operator.publicKey)))!
       .lamports;
 
-    // Creator gains bond + slashed-job refund + cancelled-job refund, less the tx fee
-    // (a few thousand lamports; assert the gain is within one base fee of 3x).
+    // Creator gains bond + slashed-job refund + cancelled-job refund (3x FEE), PLUS the
+    // reclaimed rent of the two now-closed job PDAs (OPQ-036), less the tx base fee.
     const gain = after - before;
     expect(gain).to.be.greaterThan(Number(FEE) * 3 - 10_000);
-    expect(gain).to.be.lessThan(Number(FEE) * 3);
+    // Upper bound: 3x FEE plus at most ~0.01 SOL of reclaimed job-account rent.
+    expect(gain).to.be.lessThan(Number(FEE) * 3 + 10_000_000);
     // The bond left the relayer PDA exactly.
     expect(relayerBefore - relayerAfter).to.equal(Number(FEE));
   });

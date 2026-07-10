@@ -124,6 +124,11 @@ pub mod reputation_verifier {
 
         // Mark nullifier as used
         let nullifier_entry = &mut ctx.accounts.nullifier_entry;
+        // Replay protection today comes from `#[account(init, ...)]` on this PDA (a second
+        // submission fails because the account already exists). This explicit check makes the
+        // `used` flag load-bearing rather than dead state, so a future switch of `init` to
+        // `init_if_needed` cannot silently remove replay protection (OPQ-040).
+        require!(!nullifier_entry.used, ReputationError::NullifierAlreadyUsed);
         nullifier_entry.used = true;
         nullifier_entry.bump = ctx.bumps.nullifier_entry;
 
@@ -374,6 +379,12 @@ impl NullifierEntry {
     pub const SPACE: usize = 8 + 1 + 1;
 }
 
+/// Enumeration-only list of recently-submitted roots (for UIs/indexers). Root *validity* is
+/// NOT governed by membership here: `verify_reputation` accepts any root whose per-root
+/// `MerkleRootEntry` PDA exists and is within `ROOT_EXPIRY_SECS`. A root evicted from this
+/// bounded list therefore stays usable until its timestamp expiry (unlike the EVM contract,
+/// which deletes the evicted root immediately). Do not treat this as an authorization set
+/// (OPQ-041).
 #[account]
 pub struct RootHistory {
     pub roots: Vec<[u8; 32]>,

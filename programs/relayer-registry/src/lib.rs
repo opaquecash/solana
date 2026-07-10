@@ -143,6 +143,12 @@ pub mod relayer_registry {
     ) -> Result<()> {
         let j = &mut ctx.accounts.job;
         require!(!j.closed, MarketError::JobClosed);
+        // After the deadline only slashing is valid; a late submit must not race the creator's
+        // slash and dodge the penalty (OPQ-023).
+        require!(
+            Clock::get()?.unix_timestamp < j.deadline,
+            MarketError::DeadlinePassed
+        );
         require!(
             j.relayer == ctx.accounts.operator.key(),
             MarketError::NotJobRelayer
@@ -329,6 +335,10 @@ pub struct AcceptJob<'info> {
 #[derive(Accounts)]
 #[instruction(job_id: [u8; 32])]
 pub struct SubmitJob<'info> {
+    // The successful-submit path intentionally does NOT close the job PDA to the creator: the
+    // creator is not among these accounts (the relayer submits), and threading it here would
+    // ripple into the off-chain relayer node's submit builder. The ~0.0016 SOL job-account rent
+    // is therefore retained on submit (reclaimed on slash/cancel); a known minor cost (OPQ-036).
     #[account(mut, seeds = [b"job", job_id.as_ref()], bump = job.bump)]
     pub job: Account<'info, JobAccount>,
     #[account(mut, seeds = [b"relayer", operator.key().as_ref()], bump = relayer.bump)]
@@ -340,7 +350,9 @@ pub struct SubmitJob<'info> {
 #[derive(Accounts)]
 #[instruction(job_id: [u8; 32])]
 pub struct SlashJob<'info> {
-    #[account(mut, seeds = [b"job", job_id.as_ref()], bump = job.bump, has_one = creator)]
+    // Close the finished job PDA back to the creator so its rent is reclaimed, not stranded
+    // as a closed-but-allocated orphan (OPQ-036).
+    #[account(mut, seeds = [b"job", job_id.as_ref()], bump = job.bump, has_one = creator, close = creator)]
     pub job: Account<'info, JobAccount>,
     /// CHECK: the slashed relayer's PDA; bound to job.relayer in the handler.
     #[account(mut, seeds = [b"relayer", job.relayer.as_ref()], bump = relayer.bump)]
@@ -352,7 +364,8 @@ pub struct SlashJob<'info> {
 #[derive(Accounts)]
 #[instruction(job_id: [u8; 32])]
 pub struct CancelJob<'info> {
-    #[account(mut, seeds = [b"job", job_id.as_ref()], bump = job.bump, has_one = creator)]
+    // Close the cancelled job PDA back to the creator so its rent is reclaimed (OPQ-036).
+    #[account(mut, seeds = [b"job", job_id.as_ref()], bump = job.bump, has_one = creator, close = creator)]
     pub job: Account<'info, JobAccount>,
     #[account(mut)]
     pub creator: Signer<'info>,

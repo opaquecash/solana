@@ -33,6 +33,10 @@ pub mod attestation_engine_v2 {
         expiration_slot: u64,
         ref_uid: [u8; 32],
     ) -> Result<()> {
+        // Only the byte length is enforced on-chain; the engine does NOT validate `data`
+        // against the schema's `field_definitions`. Data-shape conformance is intentionally the
+        // issuer's (at write) and consumer's (at read) responsibility — documented so an
+        // integrator does not assume on-chain schema validation (OPQ-042d).
         require!(data.len() <= MAX_DATA_LEN, AttestationError::DataTooLarge);
 
         let schema = &ctx.accounts.schema_pda;
@@ -60,6 +64,15 @@ pub mod attestation_engine_v2 {
         );
 
         let attestation = &mut ctx.accounts.attestation_pda;
+        // With init_if_needed this PDA may already hold a prior attestation for the same
+        // (schema, issuer, subject). Only overwrite it when that prior one is revoked or
+        // expired — never clobber a still-live attestation (OPQ-026). A fresh account has a
+        // zero uid.
+        if attestation.uid != [0u8; 32] {
+            let revoked = attestation.revocation_slot != 0;
+            let expired = attestation.expiration_slot != 0 && current_slot >= attestation.expiration_slot;
+            require!(revoked || expired, AttestationError::AttestationStillLive);
+        }
         attestation.bump = ctx.bumps.attestation_pda;
         attestation.uid = uid;
         attestation.schema_pda = schema.key();
@@ -88,6 +101,12 @@ pub mod attestation_engine_v2 {
             // Validate the program ID matches what the schema declares
             require!(
                 resolver_program.key() == resolver_key,
+                AttestationError::ResolverMismatch
+            );
+            // …and that it is actually executable, so a mis-set non-program resolver fails
+            // fast with a clear error instead of an opaque CPI failure (OPQ-042b).
+            require!(
+                resolver_program.executable,
                 AttestationError::ResolverMismatch
             );
 
@@ -159,6 +178,10 @@ pub mod attestation_engine_v2 {
 
             require!(
                 resolver_program.key() == resolver_key_rev,
+                AttestationError::ResolverMismatch
+            );
+            require!(
+                resolver_program.executable,
                 AttestationError::ResolverMismatch
             );
 
@@ -301,36 +324,10 @@ fn compute_attestation_uid(
 // Account structs
 // ---------------------------------------------------------------------------
 
-/// SchemaPDA is defined in the schema_registry crate. We mirror the fields
-/// we need here as a plain struct for cross-program reads via AccountLoader.
-/// In practice, the attestation_engine reads the schema PDA via CPI-less
-/// account deserialization (pass the account, check the discriminator).
-#[derive(Clone, AnchorDeserialize, AnchorSerialize)]
-pub struct SchemaPDARef {
-    pub bump: u8,
-    pub schema_id: [u8; 32],
-    pub authority: Pubkey,
-    pub resolver: Pubkey,
-    pub revocable: bool,
-    pub name: String,
-    pub field_definitions: String,
-    pub version: u8,
-    pub delegates: Vec<Pubkey>,
-    pub created_at: u64,
-    pub schema_expiry_slot: u64,
-    pub deprecated: bool,
-}
-
-impl SchemaPDARef {
-    pub fn is_authorized_issuer(&self, candidate: &Pubkey) -> bool {
-        *candidate == self.authority || self.delegates.contains(candidate)
-    }
-
-    pub fn is_active(&self, current_slot: u64) -> bool {
-        !self.deprecated
-            && (self.schema_expiry_slot == 0 || current_slot < self.schema_expiry_slot)
-    }
-}
+// The attestation engine reads the real `SchemaPDA` account type from the schema_registry
+// crate (below), validated by owner + discriminator via Anchor's `Account<'info, SchemaPDA>`.
+// A hand-mirrored `SchemaPDARef` plain struct used to live here; it was dead code whose comment
+// invited future raw deserialization that would bypass those checks — removed (OPQ-042c).
 
 // Reuse the schema_registry SchemaPDA account type directly via the extern crate.
 // The attestation engine reads SchemaPDA accounts owned by schema_registry::ID.
@@ -346,10 +343,13 @@ pub struct Attest<'info> {
     )]
     pub schema_pda: Account<'info, SchemaPDA>,
 
-    /// The new attestation account.
+    /// The attestation account.
     /// Seeds: ["attestation_v2", schema_id, issuer, stealth_address_hash]
+    /// `init_if_needed` so a credential can be RE-ISSUED to the same (schema, issuer, subject)
+    /// after the prior attestation was revoked or expired; the handler guards overwrite so a
+    /// still-live attestation is never clobbered (OPQ-026).
     #[account(
-        init,
+        init_if_needed,
         payer = issuer,
         space = AttestationPDA::MAX_SIZE,
         seeds = [
@@ -514,4 +514,6 @@ pub enum AttestationError {
     ResolverRejected,
     #[msg("Attestation UID does not match the attestation_pda account")]
     AttestationNotFound,
+    #[msg("An existing attestation for this subject is still live; revoke or let it expire before re-issuing")]
+    AttestationStillLive,
 }

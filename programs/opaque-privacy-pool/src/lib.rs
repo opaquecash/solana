@@ -23,7 +23,11 @@ declare_id!("5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY");
 pub const LEVELS: usize = 20;
 /// Recent-root ring buffer size. Kept modest so the `Pool` account (held inline in the
 /// instruction `Context`) stays within the BPF 4 KB stack frame; 16 roots is ample for
-/// proofs made against a slightly stale root.
+/// proofs made against a slightly stale root. Trade-off (OPQ-039): fewer slots than EVM's
+/// 30, so under heavy concurrent deposit/withdraw churn a caller's chosen `state_root` can be
+/// evicted before their tx lands (a `UnknownStateRoot` revert + re-prove; liveness only, no
+/// fund loss). Raising this needs the roots moved to a separate zero-copy PDA to escape the
+/// stack-frame bound.
 pub const ROOT_HISTORY: usize = 16;
 /// BN254 scalar field r, big-endian.
 const SCALAR_FIELD: [u8; 32] = [
@@ -140,6 +144,14 @@ pub mod opaque_privacy_pool {
 
         let recipient = ctx.accounts.recipient.key();
         let fee_recipient = ctx.accounts.fee_recipient.key();
+        // Reject paying out to the pool PDA itself: move_lamports would double-borrow the pool's
+        // lamport RefCell and panic the withdraw (OPQ-028). This is proof-committed via `context`
+        // so only the prover could trigger it (a self-inflicted abort), but fail fast + clearly.
+        let pool_key = ctx.accounts.pool.key();
+        require!(
+            recipient != pool_key && fee_recipient != pool_key,
+            PoolError::InvalidRecipient
+        );
         let context = compute_context(&recipient, &fee_recipient, fee, &ctx.accounts.pool.scope);
 
         // Public signals in circuit order.
@@ -160,6 +172,16 @@ pub mod opaque_privacy_pool {
         ctx.accounts.nullifier.bump = ctx.bumps.nullifier;
 
         insert(&mut ctx.accounts.pool, new_commitment)?;
+
+        // Keep the pool rent-exempt after payout. Accounting is proof-bound (withdrawals can't
+        // exceed deposited value), so this never rejects an honest withdrawal — it's a
+        // defense-in-depth floor guarding against any drift eroding the rent reserve (OPQ-028).
+        let pool_info = ctx.accounts.pool.to_account_info();
+        let rent_min = Rent::get()?.minimum_balance(pool_info.data_len());
+        require!(
+            pool_info.lamports() >= withdrawn_value.saturating_add(rent_min),
+            PoolError::RentFloorViolation
+        );
 
         // Pay out from the pool PDA (vault). recipient gets withdrawn_value - fee.
         let to_recipient = withdrawn_value - fee;
@@ -523,6 +545,10 @@ pub enum PoolError {
     PairingFailed,
     #[msg("Unauthorized: caller is not the program upgrade authority")]
     Unauthorized,
+    #[msg("Payout recipient must not be the pool account")]
+    InvalidRecipient,
+    #[msg("Payout would drop the pool below rent exemption")]
+    RentFloorViolation,
 }
 
 // VK constants appended below by the build step (export_solana_vk.py POOL).

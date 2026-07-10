@@ -14,6 +14,12 @@ pub const WORMHOLE_CORE: Pubkey = pubkey!("3u8hJUVTA4jH1wYAyUur7FFZVQ8H635K3tSHH
 /// Wormhole chain id of Solana (stamped into the cross-chain payload).
 pub const CHAIN_ID_SOLANA: u16 = 1;
 
+/// Upper bounds on native `announce`/`announce_with_log` payloads so a caller cannot emit an
+/// unbounded event or grow an unbounded log PDA (OPQ-042e). Generous enough for any CSAP
+/// stealth address and a full V2 attestation metadata (view_tag ‖ marker ‖ 4×32 = 130 bytes).
+const MAX_STEALTH_ADDRESS_LEN: usize = 64;
+const MAX_METADATA_LEN: usize = 512;
+
 /// Stealth Address Announcer — emits Announcement events when something is sent
 /// to a stealth address. Equivalent to ERC-5564 on Ethereum.
 /// One deployment per cluster so scanners can subscribe to a single log source.
@@ -43,6 +49,10 @@ pub mod stealth_announcer {
             AnnouncerError::InvalidEphemeralKey
         );
         require!(!metadata.is_empty(), AnnouncerError::MetadataMissingViewTag);
+        // Bound the payload so a caller can't emit an unbounded event / grow an unbounded log
+        // PDA (self-funded, but keep native announces within sane limits — OPQ-042e).
+        require!(stealth_address.len() <= MAX_STEALTH_ADDRESS_LEN, AnnouncerError::InvalidStealthAddress);
+        require!(metadata.len() <= MAX_METADATA_LEN, AnnouncerError::MetadataTooLong);
 
         emit!(Announcement {
             scheme_id,
@@ -73,6 +83,10 @@ pub mod stealth_announcer {
             AnnouncerError::InvalidEphemeralKey
         );
         require!(!metadata.is_empty(), AnnouncerError::MetadataMissingViewTag);
+        // Bound the payload so a caller can't emit an unbounded event / grow an unbounded log
+        // PDA (self-funded, but keep native announces within sane limits — OPQ-042e).
+        require!(stealth_address.len() <= MAX_STEALTH_ADDRESS_LEN, AnnouncerError::InvalidStealthAddress);
+        require!(metadata.len() <= MAX_METADATA_LEN, AnnouncerError::MetadataTooLong);
 
         let log = &mut ctx.accounts.announcement_log;
         log.scheme_id = scheme_id;
@@ -112,6 +126,10 @@ pub mod stealth_announcer {
     ) -> Result<()> {
         require!(ephemeral_pub_key.len() == 33, AnnouncerError::InvalidEphemeralKey);
         require!(!metadata.is_empty(), AnnouncerError::MetadataMissingViewTag);
+        // Bound the payload so a caller can't emit an unbounded event / grow an unbounded log
+        // PDA (self-funded, but keep native announces within sane limits — OPQ-042e).
+        require!(stealth_address.len() <= MAX_STEALTH_ADDRESS_LEN, AnnouncerError::InvalidStealthAddress);
+        require!(metadata.len() <= MAX_METADATA_LEN, AnnouncerError::MetadataTooLong);
         require!(!stealth_address.is_empty() && stealth_address.len() <= 32, AnnouncerError::InvalidStealthAddress);
         require!(metadata.len() <= 25, AnnouncerError::MetadataTooLong); // view tag + 24
 
