@@ -532,8 +532,8 @@ describe("PSR V2: schema → attest → verify", () => {
         proofB,
         proofC,
         rootBytes,
-        u64le(BigInt(publicSignals[1])), // attestation_id
-        u64le(BigInt(publicSignals[2])), // external_nullifier
+        be32(publicSignals[1]), // attestation_id (32-byte BE field element, OPQ-008)
+        be32(publicSignals[2]), // external_nullifier (32-byte BE field element, OPQ-008)
         nullifierHash,
       ]),
     });
@@ -574,8 +574,8 @@ describe("PSR V2: schema → attest → verify", () => {
           proofB,
           proofC,
           rootBytes,
-          u64le(BigInt(publicSignals[1])),
-          u64le(BigInt(publicSignals[2])),
+          be32(publicSignals[1]),
+          be32(publicSignals[2]),
           tamperedNullifier,
         ]),
       }),

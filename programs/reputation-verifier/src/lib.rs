@@ -67,9 +67,12 @@ pub mod reputation_verifier {
     ///   [2] external_nullifier  (public input)
     ///   [3] nullifier_hash      (Poseidon(stealth_pk, external_nullifier), public input)
     ///
-    /// `attestation_id` / `external_nullifier` cross the boundary as `u64` and are
-    /// packed big-endian into 32 bytes — the prover MUST pack them identically
-    /// when building the witness (see spec/PSR.md §field encoding).
+    /// `attestation_id` / `external_nullifier` cross the boundary as full 32-byte
+    /// big-endian field elements (mirroring the EVM `uint256`), so any canonical
+    /// SHA-256 `schema_id` / Keccak `external_nullifier` is representable — the prover
+    /// MUST encode them identically when building the witness (see spec/PSR.md §field
+    /// encoding). They were `u64` before, which silently capped the domain at 2^64 and
+    /// made spec/EVM-encoded proofs unrepresentable on Solana (OPQ-008).
     #[allow(clippy::too_many_arguments)] // args mirror the on-wire proof encoding
     pub fn verify_reputation(
         ctx: Context<VerifyReputation>,
@@ -77,8 +80,8 @@ pub mod reputation_verifier {
         proof_b: [u8; 128],
         proof_c: [u8; 64],
         root: [u8; 32],
-        attestation_id: u64,
-        external_nullifier: u64,
+        attestation_id: [u8; 32],
+        external_nullifier: [u8; 32],
         nullifier_hash: [u8; 32],
     ) -> Result<()> {
         // Check root is valid and not expired
@@ -102,8 +105,8 @@ pub mod reputation_verifier {
             proof_c,
             groth16_verifier::VerifyPublicInputsV2 {
                 merkle_root: root,
-                attestation_id: u64_to_be32(attestation_id),
-                external_nullifier: u64_to_be32(external_nullifier),
+                attestation_id,
+                external_nullifier,
                 nullifier_hash,
             },
         )?;
@@ -137,8 +140,8 @@ pub mod reputation_verifier {
         proof_b: [u8; 128],
         proof_c: [u8; 64],
         root: [u8; 32],
-        attestation_id: u64,
-        external_nullifier: u64,
+        attestation_id: [u8; 32],
+        external_nullifier: [u8; 32],
         nullifier_hash: [u8; 32],
     ) -> Result<bool> {
         let root_entry = &ctx.accounts.root_entry;
@@ -159,8 +162,8 @@ pub mod reputation_verifier {
             proof_c,
             groth16_verifier::VerifyPublicInputsV2 {
                 merkle_root: root,
-                attestation_id: u64_to_be32(attestation_id),
-                external_nullifier: u64_to_be32(external_nullifier),
+                attestation_id,
+                external_nullifier,
                 nullifier_hash,
             },
         )?;
@@ -183,12 +186,6 @@ pub mod reputation_verifier {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn u64_to_be32(val: u64) -> [u8; 32] {
-    let mut bytes = [0u8; 32];
-    bytes[24..32].copy_from_slice(&val.to_be_bytes());
-    bytes
-}
 
 // ---------------------------------------------------------------------------
 // Accounts
@@ -262,8 +259,8 @@ pub struct UpdateMerkleRoot<'info> {
     proof_b: [u8; 128],
     proof_c: [u8; 64],
     root: [u8; 32],
-    attestation_id: u64,
-    external_nullifier: u64,
+    attestation_id: [u8; 32],
+    external_nullifier: [u8; 32],
     nullifier_hash: [u8; 32],
 )]
 pub struct VerifyReputation<'info> {
@@ -301,8 +298,8 @@ pub struct VerifyReputation<'info> {
     proof_b: [u8; 128],
     proof_c: [u8; 64],
     root: [u8; 32],
-    attestation_id: u64,
-    external_nullifier: u64,
+    attestation_id: [u8; 32],
+    external_nullifier: [u8; 32],
     nullifier_hash: [u8; 32],
 )]
 pub struct VerifyReputationView<'info> {
@@ -382,7 +379,7 @@ impl RootHistory {
 
 #[event]
 pub struct ReputationVerified {
-    pub attestation_id: u64,
+    pub attestation_id: [u8; 32],
     pub nullifier_hash: [u8; 32],
     pub verifier: Pubkey,
     pub merkle_root: [u8; 32],
