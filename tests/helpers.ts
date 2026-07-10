@@ -44,6 +44,13 @@ export const disc = (name: string): Buffer =>
 export const pda = (program: PublicKey, seeds: Array<Buffer | Uint8Array>): PublicKey =>
   PublicKey.findProgramAddressSync(seeds.map(Buffer.from), program)[0];
 
+export const BPF_LOADER_UPGRADEABLE = new PublicKey(
+  "BPFLoaderUpgradeab1e11111111111111111111111",
+);
+/** The ProgramData account of an upgradeable program (holds its upgrade authority). */
+export const programData = (program: PublicKey): PublicKey =>
+  PublicKey.findProgramAddressSync([program.toBuffer()], BPF_LOADER_UPGRADEABLE)[0];
+
 export const u32le = (n: number): Buffer => {
   const b = Buffer.alloc(4);
   b.writeUInt32LE(n);

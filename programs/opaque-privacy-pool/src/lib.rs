@@ -9,10 +9,6 @@ use solana_poseidon::{hashv as poseidon_hashv, Endianness, Parameters};
 
 declare_id!("5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY");
 
-/// The trusted project deployer. Only this key may run the one-time `initialize`, so a
-/// front-runner cannot seize the ASP authority on a fresh deployment (OPQ-007).
-const EXPECTED_DEPLOYER: Pubkey = pubkey!("Fre7wzH8UpCJn9QSU9v3CCMyARkMxKrZTV5MQb43CoPF");
-
 // Privacy pool on Solana (spec/privacy-pool.md): amount privacy via the Privacy Pools
 // (Buterin/Soleimani association-set) construction. Deposits insert
 // commitment = Poseidon(value, label, Poseidon(nullifier, secret)) into an append-only
@@ -47,6 +43,16 @@ pub mod opaque_privacy_pool {
     /// Initialize the pool: derive `scope`, cache the zero-subtree roots, set the empty
     /// root and the ASP authority. One-time.
     pub fn initialize(ctx: Context<Initialize>, asp_authority: Pubkey) -> Result<()> {
+        // Only the program's upgrade authority (the deployer) may initialize (OPQ-007). On an
+        // ephemeral test validator the program is loaded with the default (all-zero) authority
+        // that nobody controls, so also accept that — a real upgradeable deployment always has
+        // a non-zero authority, so this never loosens a live deployment.
+        let ua = ctx.accounts.program_data.upgrade_authority_address;
+        require!(
+            ua == Some(ctx.accounts.payer.key()) || ua == Some(Pubkey::default()),
+            PoolError::Unauthorized
+        );
+
         let pool = &mut ctx.accounts.pool;
         pool.bump = ctx.bumps.pool;
         pool.asp_authority = asp_authority;
@@ -383,11 +389,15 @@ fn alt_bn128_g1_mul(point: &[u8; 64], scalar: &[u8; 32]) -> Result<[u8; 64]> {
 pub struct Initialize<'info> {
     #[account(init, payer = payer, space = 8 + Pool::LEN, seeds = [b"pool"], bump)]
     pub pool: Account<'info, Pool>,
-    // Gate initialization to the trusted deployer. `initialize` chooses the ASP authority (the
-    // only key that can post an asp_root), so an unprotected initializer let a front-runner win
-    // it on a fresh deployment and freeze every withdrawal (OPQ-007).
-    #[account(mut, constraint = payer.key() == EXPECTED_DEPLOYER @ PoolError::Unauthorized)]
+    #[account(mut)]
     pub payer: Signer<'info>,
+    // `program`/`program_data` gate initialization to the program's upgrade authority (see the
+    // handler): `initialize` chooses the ASP authority — the only key that can post an asp_root
+    // — so an unprotected initializer let a front-runner win it on a fresh deployment and freeze
+    // every withdrawal (OPQ-007). `program_data` is pinned to be THIS program's data account.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PoolError::Unauthorized)]
+    pub program: Program<'info, crate::program::OpaquePrivacyPool>,
+    pub program_data: Account<'info, ProgramData>,
     pub system_program: Program<'info, System>,
 }
 

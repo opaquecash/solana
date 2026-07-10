@@ -23,7 +23,7 @@ import { schnorr } from "@noble/curves/secp256k1";
 // @ts-expect-error untyped
 import * as snarkjs from "snarkjs";
 
-import { connection, disc, payer, pda, send, sendExpectFail, u64le } from "./helpers";
+import { connection, disc, payer, pda, programData, send, sendExpectFail, u64le } from "./helpers";
 
 const PROGRAM = new PublicKey("7sDCTbMDwjzYA3KHhNPZUVa8Swvj6adJTgSkJqmsn6V7");
 const POOL_PROGRAM = new PublicKey("5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY");
@@ -98,6 +98,8 @@ describe("conditional-disclosure", () => {
           keys: [
             { pubkey: poolPda, isSigner: false, isWritable: true },
             { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+            { pubkey: POOL_PROGRAM, isSigner: false, isWritable: false },
+            { pubkey: programData(POOL_PROGRAM), isSigner: false, isWritable: false },
             { pubkey: SYS, isSigner: false, isWritable: false },
           ],
           data: Buffer.concat([disc("initialize"), payer.publicKey.toBuffer()]),

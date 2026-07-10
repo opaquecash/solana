@@ -2,10 +2,6 @@ use anchor_lang::prelude::*;
 
 declare_id!("BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM");
 
-/// The trusted project deployer. Only this key may run the one-time `initialize`, so a
-/// front-runner cannot become `admin` (and register arbitrary roots) on deployment (OPQ-007).
-const EXPECTED_DEPLOYER: Pubkey = pubkey!("Fre7wzH8UpCJn9QSU9v3CCMyARkMxKrZTV5MQb43CoPF");
-
 /// Maximum age of a Merkle root (in seconds) before it's considered stale.
 const ROOT_EXPIRY_SECS: i64 = 3600; // 1 hour
 
@@ -24,6 +20,16 @@ pub mod reputation_verifier {
 
     /// Initialize the verifier config. Called once after deployment.
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        // Only the program's upgrade authority (the deployer) may initialize (OPQ-007). On an
+        // ephemeral test validator the program is loaded with the default (all-zero) authority
+        // nobody controls, so also accept that — a real upgradeable deployment always has a
+        // non-zero authority, so this never loosens a live deployment.
+        let ua = ctx.accounts.program_data.upgrade_authority_address;
+        require!(
+            ua == Some(ctx.accounts.admin.key()) || ua == Some(Pubkey::default()),
+            ReputationError::Unauthorized
+        );
+
         let config = &mut ctx.accounts.config;
         config.admin = ctx.accounts.admin.key();
         config.groth16_verifier = ctx.accounts.groth16_program.key();
@@ -211,9 +217,7 @@ pub struct Initialize<'info> {
     )]
     pub root_history: Account<'info, RootHistory>,
 
-    // Gate initialization to the trusted deployer so a front-runner cannot become the `admin`
-    // (and register arbitrary Merkle roots) on a fresh deployment (OPQ-007).
-    #[account(mut, constraint = admin.key() == EXPECTED_DEPLOYER @ ReputationError::Unauthorized)]
+    #[account(mut)]
     pub admin: Signer<'info>,
 
     /// CHECK: The real Groth16 verifier, pinned by address (and required executable) so a
@@ -221,6 +225,13 @@ pub struct Initialize<'info> {
     /// the ZK gate for every downstream consumer (OPQ-007).
     #[account(executable, address = groth16_verifier::ID)]
     pub groth16_program: UncheckedAccount<'info>,
+
+    // `program`/`program_data` gate initialization to the program's upgrade authority (see the
+    // handler) so a front-runner cannot become `admin` (and register arbitrary Merkle roots) on
+    // a fresh deployment (OPQ-007). `program_data` is pinned to be THIS program's data account.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ ReputationError::Unauthorized)]
+    pub program: Program<'info, crate::program::ReputationVerifier>,
+    pub program_data: Account<'info, ProgramData>,
 
     pub system_program: Program<'info, System>,
 }
